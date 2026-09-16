@@ -1,0 +1,39 @@
+.vs/
+*.VC.db
+*.suo
+*.user
+*.ipch
+
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+Debug/
+Release/
+x64/
+*.exe
+*.obj
+*.pdb
+*.ilk
+
+# 默认忽略运行生成的日志和结果文件。
+*.log
+*.txt
+
+# 允许提交课程演示用的离线样例数据和参考对比文件。
+!SPP/NovatelOEM20211114-01.log
+!SPP/NovatelOEM20211114-02.log
+!NovatelOEM20211114-01.obs
+!NovatelOEM20211114-01.pos
+!广播星历计算结果 - 241015.txt
+
+# 程序运行输出仍然忽略，避免每次运行后污染提交。
+observations1.txt
+satpos1.txt
+spp_solution.txt
+realtime_raw_oem.log
+SPP/observations1.txt
+SPP/satpos1.txt
+SPP/spp_solution.txt
