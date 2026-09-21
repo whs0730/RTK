@@ -36,7 +36,7 @@
     <ClCompile Include="satpos.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="rtk.cpp">
+    <ClCompile Include="spp.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="stream_decode.cpp">
@@ -45,12 +45,12 @@
     <ClCompile Include="timeTransform.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="rtk_prepare.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="timeTransform.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
-    <ClInclude Include="calculate_location_spped.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="obs.h">
@@ -68,7 +68,7 @@
     <ClInclude Include="coordinate.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="rtk.h">
+    <ClInclude Include="spp.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="error_correction.h">
@@ -78,6 +78,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="satpos.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="rtk_prepare.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

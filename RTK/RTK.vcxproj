@@ -137,8 +137,9 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="matrix.cpp" />
     <ClCompile Include="obs.cpp" />
+    <ClCompile Include="rtk_prepare.cpp" />
     <ClCompile Include="satpos.cpp" />
-    <ClCompile Include="rtk.cpp" />
+    <ClCompile Include="spp.cpp" />
     <ClCompile Include="stream_decode.cpp" />
     <ClCompile Include="timeTransform.cpp" />
   </ItemGroup>
@@ -149,8 +150,9 @@
     <ClInclude Include="error_correction.h" />
     <ClInclude Include="matrix.h" />
     <ClInclude Include="obs.h" />
+    <ClInclude Include="rtk_prepare.h" />
     <ClInclude Include="satpos.h" />
-    <ClInclude Include="rtk.h" />
+    <ClInclude Include="spp.h" />
     <ClInclude Include="stream_decode.h" />
     <ClInclude Include="timeTransform.h" />
   </ItemGroup>

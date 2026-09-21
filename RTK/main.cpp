@@ -4,6 +4,7 @@
 #include "coordinate.h"
 #include "error_correction.h"
 #include "spp.h"
+#include "rtk_prepare.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
