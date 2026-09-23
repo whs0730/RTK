@@ -134,12 +134,15 @@
     <ClCompile Include="coordinate.cpp" />
     <ClCompile Include="decode.cpp" />
     <ClCompile Include="error_correction.cpp" />
-    <ClCompile Include="main.cpp" />
+    <ClCompile Include="rtk_main.cpp" />
     <ClCompile Include="matrix.cpp" />
     <ClCompile Include="obs.cpp" />
     <ClCompile Include="rtk_prepare.cpp" />
     <ClCompile Include="satpos.cpp" />
     <ClCompile Include="spp.cpp" />
+    <ClCompile Include="spp_main.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="stream_decode.cpp" />
     <ClCompile Include="timeTransform.cpp" />
   </ItemGroup>

@@ -24,9 +24,6 @@
     <ClCompile Include="error_correction.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="main.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="matrix.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -46,6 +43,12 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="rtk_prepare.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="rtk_main.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="spp_main.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>

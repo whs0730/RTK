@@ -17,7 +17,7 @@ x64/
 *.obj
 *.pdb
 *.ilk
-
+OEM7data/
 # 默认忽略运行生成的日志和结果文件。
 *.log
 *.txt
