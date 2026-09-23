@@ -553,7 +553,7 @@ int sync_oem4(uint8_t* buff, uint8_t data) {
     return buff[0] == OEM4SYNC1 && buff[1] == OEM4SYNC2 && buff[2] == OEM4SYNC3;
 }
 // 文件输入：先搜索同步头，再按报文长度读完一帧 OEM4 数据。
-int input_oem4f(raw_t* raw, FILE* fp) {
+int input_oem4f(raw_t* raw, FILE* fp, bool compressed_only) {
     int i, data; //data 保存当前读到的一个字节
 
     if (raw->nbyte == 0) {
@@ -567,6 +567,13 @@ int input_oem4f(raw_t* raw, FILE* fp) {
     raw->nbyte = 10;
 
     raw->len = U2(raw->buff + 8) + OEM4HLEN;
+    if (compressed_only && U2(raw->buff + 4) == ID_RANGE)
+    {
+        // 已读入前10字节；跳过本帧剩余内容（包括4字节CRC）
+        int remaining = raw->len - 6;
+        raw->nbyte = 0;
+        return fseek(fp, remaining, SEEK_CUR) == 0 ? 0 : -2;
+    }
     if (raw->len > MAXRAWLEN - 4) {
         raw->nbyte = 0;
         return -1;

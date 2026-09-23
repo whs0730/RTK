@@ -9,7 +9,7 @@ bool ReadNextObservationEpoch(FILE* fp, station_state_t& station)
 	}
 	while (true)
 	{
-		int ret = input_oem4f(&station.raw, fp);
+		int ret = input_oem4f(&station.raw, fp,true);
 		//文件结束
 		if (ret == -2)
 		{
@@ -34,7 +34,10 @@ bool ReadNextObservationEpoch(FILE* fp, station_state_t& station)
 		//清空上一历元处理结果
 		memset(station.sats, 0, sizeof(station.sats));
 		station.spp_sol = sol_t();
+		station.speed_sol = solvel_t();
 		station.valid_sat = 0;
+		station.position_ok = false;
+		station.speed_ok = false;
 		return true;
 	}
 }
@@ -50,7 +53,7 @@ int CompareStationEpochTime(const station_state_t& base,
 		return 0;
 	}
 	const gtime_t& base_time = base.raw.obs.data[0].time;
-	const gtime_t& rover_time = base.raw.obs.data[0].time;
+	const gtime_t& rover_time = rover.raw.obs.data[0].time;
 	dt = timediff(base_time, rover_time);
 	//时间差小于0.001
 	if (fabs(dt) < config.sync_tolerance)
@@ -62,4 +65,50 @@ int CompareStationEpochTime(const station_state_t& base,
 		return -1;//基准站较早
 	}
 	return 1;//流动站较早
+}
+bool ProcessStationEpoch(station_state_t& station) {
+	// 当前测站、当前历元的观测数据
+	obs_t& obs = station.raw.obs;
+	//清空上一历元处理结果
+	memset(station.sats, 0, sizeof(station.sats));
+	station.spp_sol = sol_t();
+	station.speed_sol = solvel_t();
+	station.valid_sat = 0;
+	station.position_ok = false;
+	station.speed_ok = false;
+	if (obs.n <= 0)
+	{
+		return false;
+	}
+	station.valid_sat = CaculateSatellitePositions(obs.data, obs.n, &station.raw.nav, station.sats);
+	//spp至少四颗星
+	if (station.valid_sat < 4)
+	{
+		return false;
+	}
+	//spp解算
+	int position_nv = 0;
+	const sol_t* initial_solution = nullptr;
+	if (station.has_last_spp)
+	{
+		initial_solution = &station.last_spp_sol;
+	}
+	station.position_ok = SPP(obs.data, obs.n, &station.raw.nav, &station.spp_sol, station.sats, &position_nv, initial_solution);
+	if (!station.position_ok || station.spp_sol.stat != 1)
+	{
+		station.spp_sol.stat = 0;
+		return false;
+	}
+	//保存位置的成功解，作为下一历元的初值
+	station.last_spp_sol = station.spp_sol;
+	station.has_last_spp = true;
+	//速度解算
+	int speed_nv = 0;
+	station.speed_ok = SPP_Speed(obs.data, obs.n, &station.spp_sol, station.sats, &station.speed_sol, &speed_nv);
+	if (!station.speed_ok || station.speed_sol.stat != 1)
+	{
+		station.speed_ok = false;
+		station.speed_sol.stat = 0;
+	}
+	return true;//计算出位置就返回成功
 }

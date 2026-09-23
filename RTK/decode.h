@@ -66,4 +66,4 @@ int decode_oem4(raw_t* raw);
 int sync_oem4(uint8_t* buff, uint8_t data);
 
 // 文件模式输入：逐字节读取并在凑齐完整报文后调用 decode_oem4()。
-int input_oem4f(raw_t* raw, FILE* fp);
+int input_oem4f(raw_t* raw, FILE* fp, bool compressed_only = false);

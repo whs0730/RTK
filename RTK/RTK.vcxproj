@@ -134,7 +134,9 @@
     <ClCompile Include="coordinate.cpp" />
     <ClCompile Include="decode.cpp" />
     <ClCompile Include="error_correction.cpp" />
-    <ClCompile Include="rtk_main.cpp" />
+    <ClCompile Include="rtk_main.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="matrix.cpp" />
     <ClCompile Include="obs.cpp" />
     <ClCompile Include="rtk_prepare.cpp" />
@@ -143,6 +145,7 @@
     <ClCompile Include="spp_main.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="station_satpos.cpp" />
     <ClCompile Include="stream_decode.cpp" />
     <ClCompile Include="timeTransform.cpp" />
   </ItemGroup>
@@ -156,6 +159,7 @@
     <ClInclude Include="rtk_prepare.h" />
     <ClInclude Include="satpos.h" />
     <ClInclude Include="spp.h" />
+    <ClInclude Include="station_satpos.h" />
     <ClInclude Include="stream_decode.h" />
     <ClInclude Include="timeTransform.h" />
   </ItemGroup>

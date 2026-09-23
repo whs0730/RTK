@@ -1,8 +1,8 @@
 #pragma once
-
+#include "spp.h"
 #include "decode.h"
 #include "obs.h"
-
+#include "station_satpos.h"
 // RTK任务一配置参数
 struct rtk_config_t
 {
@@ -19,8 +19,12 @@ struct station_state_t
     satpos_t sats[MAXOBS];          // 当前历元卫星位置与钟差
     sol_t spp_sol;                  // 当前历元SPP结果
     sol_t last_spp_sol;             // 上一个成功历元SPP结果
-
+    solvel_t speed_sol;       // 当前历元速度和接收机钟速
+    
     int valid_sat = 0;
+
+    bool speed_ok = false;
+    bool position_ok = false;
     bool has_last_spp = false;
     bool eof = false;
 };
