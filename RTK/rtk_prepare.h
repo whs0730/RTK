@@ -102,3 +102,9 @@ bool PassRtkObservationCheck(
     double base_azel[2],
     double rover_azel[2]
 );
+//筛选共视卫星
+bool WritePreparedEpoch(ostream& out,const rtk_epoch_t& epoch);
+//基准站和流动站的完整解码观测数据
+bool WriteStationObservations(ostream& out, const obs_t& obs);
+//读写函数
+bool ReadAndExportNext(FILE* fp,station_state_t& station,ostream& out,bool& output_failed);
