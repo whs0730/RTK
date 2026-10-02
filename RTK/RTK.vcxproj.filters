@@ -54,6 +54,9 @@
     <ClCompile Include="station_satpos.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="rtk_model.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="timeTransform.h">
@@ -90,6 +93,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="station_satpos.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="rtk_model.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

@@ -5,6 +5,7 @@
 #include "error_correction.h"
 #include "spp.h"
 #include "rtk_prepare.h"
+#include "rtk_model.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -58,8 +59,11 @@ int main(int argc,char*argv[])
 	ofstream base_obs_out("base_observations_3_1.txt");
 	ofstream rover_obs_out("rover_observations_3_1.txt");
 	ofstream prepared_out("rtk_prepared_3_1.txt");
+	//任务二：输出每个有效历元的参考星、行列映射、B矩阵和L向量
+	ofstream model_out("rtk_function_model_3_1.txt");
 	//输出文件创建失败返回错误信息
-	if (!base_obs_out.is_open() || !rover_obs_out.is_open() || !prepared_out.is_open())
+	if (!base_obs_out.is_open() || !rover_obs_out.is_open() ||
+		!prepared_out.is_open() || !model_out.is_open())
 	{
 		cerr << "Cannot open one or more output files" << endl;
 		fclose(base_fp);
@@ -70,6 +74,10 @@ int main(int argc,char*argv[])
 	station_state_t *base_station=new station_state_t();
 	station_state_t *rover_station=new station_state_t();
 	rtk_config_t config;
+	//任务二的系统/频点选项；改成1可构建双系统单频模型
+	rtk_model_options_t model_options;
+	model_options.frequency_count = 2;
+	rtk_function_model_t function_model;
 
 	bool output_failed = false;
 	//读取首个历元并且写入每个站的观测数据
@@ -84,6 +92,9 @@ int main(int argc,char*argv[])
 	int both_spp_ok_epochs = 0;
 	//共同历元且都有SPP解且筛选后依旧有效
 	int prepared_epochs = 0;
+	//任务二：成功构模并写入文件的历元，以及未能构模的历元
+	int model_epochs = 0;
+	int model_failed_epochs = 0;
 	//为共同历元创建结构体
 	rtk_epoch_t* rtk_epoch = new rtk_epoch_t();
 	//遍历所有历元
@@ -123,12 +134,33 @@ int main(int argc,char*argv[])
 				if (!WritePreparedEpoch(prepared_out, *rtk_epoch))
 				{
 					output_failed = true;
-					cerr << "Failed to write rtk_prepared_3_3.txt at epoch "
+					cerr << "Failed to write prepared epoch at "
 						<< rtk_epoch->time.week << ' '
 						<< rtk_epoch->time.sec << endl;
 					break;
 				}
 				prepared_epochs++;
+				//流动站SPP坐标作为线性化展开点；基准站坐标由epoch提供
+				if (BuildRtkFunctionModel(*rtk_epoch, rtk_epoch->rover_spp.XYZ,
+					config, model_options, function_model))
+				{
+					if (!WriteRtkFunctionModel(model_out, function_model))
+					{
+						output_failed = true;
+						cerr << "Failed to write function model at epoch "
+							<< rtk_epoch->time.week << ' ' << rtk_epoch->time.sec << endl;
+						break;
+					}
+					model_epochs++;
+				}
+				else
+				{
+					//几何或观测不满足构模条件时跳过，避免输出无效/上一历元模型
+					model_failed_epochs++;
+					cerr << "Function model skipped at epoch "
+						<< rtk_epoch->time.week << ' ' << rtk_epoch->time.sec
+						<< ": " << function_model.error_message << endl;
+				}
 			}
 			cout << "SPP "
 				<< "week=" << base_time.week
@@ -169,7 +201,14 @@ int main(int argc,char*argv[])
 	if (!prepared_out && !output_failed)
 	{
 		output_failed = true;
-		cerr << "Failed to close rtk_prepared_3_3.txt after writing" << endl;
+		cerr << "Failed to close prepared epoch output after writing" << endl;
+	}
+	//关闭任务二输出，检查缓冲区最后写入是否成功
+	model_out.close();
+	if (!model_out)
+	{
+		output_failed = true;
+		cerr << "Failed to close function model output after writing" << endl;
 	}
 	//销毁rtk结构体
 	delete rtk_epoch;
@@ -183,8 +222,14 @@ int main(int argc,char*argv[])
 		<< skipped_rover_epochs << endl;
 	cout << "Both SPP successful epochs: " << both_spp_ok_epochs << endl;
 	cout << "Prepared epochs: " << prepared_epochs << endl;
-	cout << "Output files: base_observations.txt, "
-		<< "rover_observations.txt, rtk_prepared.txt" << endl;
+	cout << "Function model epochs: " << model_epochs << endl;
+	cout << "Function model skipped epochs: " << model_failed_epochs << endl;
+	cout << "Function model mode: GPS=" << model_options.use_gps
+		<< " BDS=" << model_options.use_bds
+		<< " frequencies=" << model_options.frequency_count << endl;
+	cout << "Output files: base_observations_3_1.txt, "
+		<< "rover_observations_3_1.txt, rtk_prepared_3_1.txt, "
+		<< "rtk_function_model_3_1.txt" << endl;
 	//关闭文件
 	fclose(base_fp);
 	fclose(rover_fp);

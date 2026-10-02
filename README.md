@@ -1,314 +1,210 @@
-﻿# SPP 单点定位与测速程序说明
+# RTK 定位程序——卫星导航算法与程序设计 II
 
-本工程用于解码 NovAtel OEM4 二进制数据，并完成 GPS/BDS 双系统双频单点定位与测速。程序支持两种数据来源：
+本工程用于本学期（2026 年秋季）的 RTK 编程实习，在上学期 GPS/BDS 双频 SPP 定位与测速程序的基础上，逐步实现双站数据准备、双差函数模型、随机模型、参数估计和整周模糊度固定。
 
-- 离线文件：读取 `.log` 二进制观测文件。
-- 实时流：通过 TCP 读取 NovAtel OEM4 实时数据流。
+课程目标是处理 NovAtel OEM719 两站观测数据，实现零基线、短基线的静态或动态 RTK 定位，最终获得厘米级固定解。**当前代码已接入离线双站数据准备与函数模型构建，尚未实现 RTK 浮点解和固定解。**
 
-主流程为：
+## 本学期实习任务与当前进度
+
+任务要求依据同级 `课件/` 目录中的实习任务 1–5；下表中的实现进度以当前源码为准。
+
+| 实习任务 | 课程要求 | 当前实现 |
+| --- | --- | --- |
+| 任务 1：RTK 解算所需数据准备 | 两站原始数据读取与解码、观测时间同步、分别 SPP、共视卫星筛选及历元数据保存 | 已接入离线主流程；双站实时输入与缓存同步待实现 |
+| 任务 2：RTK 函数模型建立 | 短基线双差非组合模型，建立 `B`、`L`，输出观测数与参数数；必须支持双系统单频，尽量支持其他系统/频点组合 | 已接入 `rtk_model.cpp/.h`，支持 GPS、BDS、GPS+BDS 的单频/双频组合；主流程默认双系统双频 |
+| 任务 3：RTK 随机模型建立 | 根据非差→单差→双差的协方差传播构建方差阵和权阵，保留共享参考星带来的相关性，与函数模型行序对应 | 待实现 |
+| 任务 4：参数估计 | 单历元最小二乘实数解；课件还介绍逐历元递推与扩展 Kalman 滤波，以及参考星变换、卫星增减和周跳处理 | 待实现 |
+| 任务 5：模糊度固定 | 将浮点模糊度及其协方差送入 LAMBDA，进行 Ratio 检验，固定成功后更新位置，否则保留浮点解 | 待实现 |
+
+任务 3 课件建议伪距与相位方差比采用 `10000:1`，任务 4 给出的范围为 `(10000～40000):1`；任务 5 的 Ratio 阈值示例为 `2.0`。这些是后续实现的课件参数，目前尚未成为程序配置。
+
+## 当前处理流程
 
 ```text
-读取 OEM4 数据
--> 解码观测值和广播星历
--> 按历元组织观测值
--> 计算卫星发射时刻位置、速度、钟差、钟速
--> 地球自转、对流层、TGD 等改正
--> 双频 IF 组合
--> GPS/BDS SPP 最小二乘定位
--> 多普勒测速
--> 输出结果文件
+分别读取基准站和流动站 OEM 二进制文件
+-> 各站独立解码观测值与广播星历
+-> 根据 GPST 观测时标同步两站历元
+-> 各站计算卫星状态并分别进行 SPP、多普勒测速
+-> 按卫星编号匹配并筛选共视卫星
+-> 保存同步历元、两站观测值、概略位置和各自卫星状态
+-> GPS/BDS 分别选择参考星
+-> 构建双差函数模型 B、L 及行列映射
+-> 输出任务 1、任务 2 检查文件
 ```
+
+随机模型、RTK 参数估计和模糊度固定尚未接入上述流程。两站 SPP 提供的是概略坐标，不能视为 RTK 定位结果。
 
 ## 目录结构
 
 ```text
-SPP/
-  main.cpp                  主程序流程：输入、解码、卫星状态计算、SPP、测速、输出
-  define.h                  常量定义：系统编号、频率、消息 ID、PRN 范围等
-
-  obs.h / obs.cpp           观测值、星历、卫星状态、解算结果结构体和卫星编号转换
-  decode.h / decode.cpp     NovAtel OEM4 二进制数据解码
-  stream_decode.h / .cpp    实时 TCP 流读取
-  timeTransform.h / .cpp    GPST、BDT、MJD、公历时间转换
-  coordinate.h / .cpp       XYZ、BLH、ENU 坐标转换和高度角计算
-  satpos.h / satpos.cpp     GPS/BDS 广播星历卫星位置、速度、钟差、钟速计算
-  error_correction.h / .cpp 对流层、电离层、地球自转等误差改正
-  spp.h / spp.cpp           IF 组合、质量控制、SPP 定位和测速
-  matrix.h / matrix.cpp     简单矩阵运算和最小二乘求逆
+RTK/
+  README.md
+  RTK.slnx                         Visual Studio 解决方案
+  RTK/
+    RTK.vcxproj / .filters         工程与文件分组
+    rtk_main.cpp                   当前离线双站入口，串联任务 1、任务 2
+    rtk_prepare.h / .cpp           双站状态、历元同步、SPP、共视筛选与导出
+    rtk_model.h / .cpp             双差函数模型、参考星选择和 B/L 导出
+    station_satpos.h / .cpp        单站观测对应的卫星状态计算
+    spp.h / .cpp                   保留的 SPP 定位与多普勒测速模块
+    spp_main.cpp                   上学期单站离线/实时 SPP 入口
+    obs.h / .cpp                   观测、星历、卫星状态及结果结构体
+    decode.h / .cpp                NovAtel OEM 二进制解码
+    stream_decode.h / .cpp         原单站 TCP 流读取模块
+    satpos.h / .cpp                GPS/BDS 广播星历计算
+    timeTransform.h / .cpp         时间系统转换
+    coordinate.h / .cpp            XYZ、BLH、ENU 与方位角/高度角计算
+    error_correction.h / .cpp      SPP 使用的误差改正
+    matrix.h / .cpp                矩阵运算
+    OEM7data/                      本地课程数据及参考结果
+  tests/
+    README.md                      任务 2 验证方法
+    rtk_model_tests.cpp            独立函数模型测试入口
+    compare_rtk_info.py            与课程 RTKInfo 参考文件的比较脚本
 ```
+
+`spp.cpp/.h` 继续负责单点定位；本学期新增的 RTK 功能位于 `rtk_prepare`、`rtk_model` 等模块中。`OEM7data/`、编译产物和大部分运行输出由 `.gitignore` 忽略，复制或克隆源码后需要另行准备课程数据。
 
 ## 编译方法
 
-### 方法一：Visual Studio
+1. 使用支持 `.slnx` 的 Visual Studio 打开根目录下的 `RTK.slnx`。
+2. 选择 **Debug / x64**，生成解决方案。
+3. 从工程根目录运行时，可执行文件路径为 `x64\Debug\RTK.exe`。
 
-1. 打开根目录下的 `SPP.slnx`。
-2. 选择 `x64` 和 `Debug` 或 `Release`。
-3. 生成解决方案。
-4. 可执行文件通常位于项目目录下：
+工程当前使用 `v145` 工具集、C++20 和 UTF-8 编译选项。若本机缺少对应工具集，需要安装该工具集或按本机环境重定向工程；若 IDE 不支持 `.slnx`，可直接打开 `RTK\RTK.vcxproj`。
 
-```text
-SPP\x64\Debug\SPP.exe
-```
+**当前明确配置入口排除规则的是 Debug / x64：启用 `rtk_main.cpp`，排除 `spp_main.cpp`。** 切换到其他配置前，应检查两个入口文件的“从生成中排除”设置，保证仅编译一个 `main()`。
 
-### 方法二：命令行 g++
+## 数据说明
 
-在工程根目录执行：
+两组数据均位于 `RTK/OEM7data/`，每组包含 `base.log`、`rove.log`、`RINEX/` 和 `res/`。
 
-```powershell
-E:\MSYS2\ucrt64\bin\g++.exe -std=c++17 -finput-charset=UTF-8 -fexec-charset=UTF-8 `
-  .\SPP\main.cpp .\SPP\satpos.cpp .\SPP\decode.cpp .\SPP\spp.cpp `
-  .\SPP\timeTransform.cpp .\SPP\matrix.cpp .\SPP\obs.cpp `
-  .\SPP\coordinate.cpp .\SPP\error_correction.cpp .\SPP\stream_decode.cpp `
-  -o .\build\SPP_current.exe -lws2_32
-```
+| 数据目录 | 基线类型 | 用途 |
+| --- | --- | --- |
+| `20240301/` | 零基线 | 优先检查解码、同步、共视筛选和模型构建 |
+| `20240303/` | 短基线 | 零基线检查通过后，验证短基线处理 |
+
+按数据包的 `readme.txt`，两组基准站参考 ECEF 坐标均为 `(-2267808.6227, 5009324.7699, 3221016.8928) m`；短基线给出的 XYZ 分量为 `(-1.398, 2.575, -4.920) m`，ENU 分量为 `(0.211, -5.723, 0.018) m`。
+
+课件指定接收机为 OEM719，数据包说明标注采集设备为 OEM729，数据均为 NovAtel OEM 格式。当前函数模型直接使用基准站 SPP 坐标作为已知量，上述高精度参考坐标尚未作为外部坐标配置接入。
 
 ## 运行方法
 
-### 离线文件模式
+以下 PowerShell 命令均从工程根目录开始，使用新编译的 Debug / x64 程序。
 
-推荐进入源码项目目录后运行：
+### 默认零基线数据
 
 ```powershell
-cd "D:\Course Study\Satellite navigation algorithm\Algorithm\SPP\SPP"
-.\x64\Debug\SPP.exe
+Set-Location .\RTK
+..\x64\Debug\RTK.exe
 ```
 
-如果不传文件名，程序默认读取：
+不传参数时，程序读取当前工作目录下的：
 
 ```text
-NovatelOEM20211114-01.log
+OEM7data\20240301\base.log
+OEM7data\20240301\rove.log
 ```
 
-注意：默认文件名是相对当前运行目录的。如果在上一级目录运行，需要显式写出文件路径：
+### 显式指定两站文件
+
+在工程根目录运行零基线数据：
 
 ```powershell
-cd "D:\Course Study\Satellite navigation algorithm\Algorithm\SPP"
-.\SPP\x64\Debug\SPP.exe .\SPP\NovatelOEM20211114-01.log
+.\x64\Debug\RTK.exe .\RTK\OEM7data\20240301\base.log .\RTK\OEM7data\20240301\rove.log
 ```
 
-### 实时流模式
-
-使用默认 IP 和端口：
+运行短基线数据：
 
 ```powershell
-cd "D:\Course Study\Satellite navigation algorithm\Algorithm\SPP"
-.\x64\Debug\SPP.exe --stream
+.\x64\Debug\RTK.exe .\RTK\OEM7data\20240303\base.log .\RTK\OEM7data\20240303\rove.log
 ```
 
-指定 IP 和端口：
+参数顺序为 **基准站文件、流动站文件**。需要同时提供两个路径；只传一个路径时，当前程序仍使用两站默认文件。相对输入路径和输出文件都以进程的当前工作目录为基准，在 Visual Studio 中调试时也应检查“工作目录”和“命令参数”。
 
-```powershell
-cd "D:\Course Study\Satellite navigation algorithm\Algorithm\SPP"
-.\x64\Debug\SPP.exe --stream 8.148.22.229 7003
-```
+当前 `rtk_main.cpp` 仅实现双站离线文件处理，没有可用的双站 `--stream` 模式。原单站实时 SPP 代码仍保留在 `spp_main.cpp` 和 `stream_decode.cpp`，不能直接作为双站实时 RTK 的使用方法。
 
-实时模式下，终端会输出类似：
+## 任务 1：双站数据准备
+
+`station_state_t` 为每个测站分别保存解码状态、观测值、星历、卫星状态与 SPP 结果；`rtk_epoch_t` 保存同步后的两站数据及共视卫星集合。
+
+当前质量控制参数由 `rtk_config_t` 定义：
+
+| 项目 | 默认要求 |
+| --- | --- |
+| 时间同步 | `abs(t_base - t_rover) < 0.001 s` |
+| 截止高度角 | 两站均不低于 `10°` |
+| 信噪比 | 两站两个频点均严格大于 `30 dB-Hz` |
+| 观测值 | 两站双频伪距和载波相位有效、观测码匹配 |
+| 系统与频率 | GPS L1/L2，BDS B1I/B3I |
+
+时间不匹配时推进较早的一站；两站 SPP 均成功后，按内部卫星编号匹配共视卫星，不依赖两站观测数组的排序相同。两站分别保存并使用自己的卫星位置、钟差、方位角和高度角。
+
+LLI 随观测数据保存，目前没有实现跨历元周跳探测与修复。
+
+## 任务 2：双差函数模型
+
+`BuildRtkFunctionModel()` 构建短基线单历元模型。GPS 与 BDS 各选一个参考星，BDS-2/BDS-3 作为同一系统处理；默认选取各系统流动站高度角最高的合格卫星，并排除 BDS GEO 作为参考星。
 
 ```text
-Wk 2420 SOW 393399.000 XYZ ... ENU ... n=23 PDOP=1.109
+站间单差：流动站 - 基准站
+星间双差：非参考星单差 - 参考星单差
+线性模型：L = B × [dX, dY, dZ, N_DD, ...]^T + noise
 ```
 
-其中：
+`L` 为原始双差观测减双差几何距离，单位为米；坐标参数为流动站展开点的改正数，单位为米；模糊度参数为本历元的绝对双差模糊度，单位为周。相位观测先乘对应波长，设计矩阵中的模糊度系数也为波长。
 
-- `Wk`：GPS 周
-- `SOW`：周内秒
-- `XYZ`：接收机 ECEF 坐标
-- `ENU`：相对参考坐标的东、北、天误差
-- `n`：当前可用卫星数
-- `PDOP`：空间几何精度因子
+基准站坐标固定为本历元基准站 SPP 坐标，流动站 SPP 坐标作为主流程的线性化展开点。几何距离分别使用各站的卫星位置。
+
+当前行序为 GPS 相位 f0/f1、GPS 伪距 f0/f1，再按同样顺序排列 BDS；单频模式省略 f1。前三列为 `dX/dY/dZ`，后续列为各系统、各频点的双差模糊度。`rows` 和 `ambiguities` 保存行列对应关系，任务 3 应沿用这些映射来构建权阵。
+
+主流程中的系统、频点选项在 `rtk_main.cpp` 设置，例如：
+
+```cpp
+rtk_model_options_t model_options;
+model_options.use_gps = true;
+model_options.use_bds = true;
+model_options.frequency_count = 1;  // 双系统单频；设为 2 则为双频
+```
+
+修改后需要重新编译，这些选项尚无命令行接口。任务 1 当前按双频筛选共视集合，因此任务 2 的单频模式不会恢复此前因第二频点缺失而被剔除的卫星。构模还检查三维双差几何是否满秩，失败历元会报告原因并跳过。
 
 ## 输出文件
 
-程序输出文件的位置与运行的那个 `SPP.exe` 对应的 `SPP` 目录有关。可以简单理解为：你运行哪一级 `SPP` 目录下的 `SPP.exe`，输出文件就放在哪一级 `SPP` 目录里。
+当前主程序在**运行时的工作目录**创建以下文件：
 
-这一点很重要：
+| 文件 | 内容 |
+| --- | --- |
+| `base_observations_3_1.txt` | 基准站逐个读取历元的解码观测值，含 P/L/D/SNR/code/LLI |
+| `rover_observations_3_1.txt` | 流动站逐个读取历元的解码观测值 |
+| `rtk_prepared_3_1.txt` | 有效同步历元、两站 SPP 坐标与钟差、共视观测、各站卫星状态和方位角/高度角 |
+| `rtk_function_model_3_1.txt` | 参考星、观测数 `nv`、参数数 `nx`、行列映射、`B` 矩阵和 `L` 向量 |
 
-- 如果在 Visual Studio 中直接调试离线程序，通常运行的是项目目录下的 `SPP\SPP\x64\Debug\SPP.exe`，输出文件会在 `D:\Course Study\Satellite navigation algorithm\Algorithm\SPP\SPP`。
-- 如果在上一级目录终端运行实时流，例如在 `D:\Course Study\Satellite navigation algorithm\Algorithm\SPP>` 下执行 `.\x64\Debug\SPP.exe --stream`，输出文件会在上一级目录 `D:\Course Study\Satellite navigation algorithm\Algorithm\SPP`。
-- 因此，同一个程序在 VS 调试和上一级终端运行时，输出位置可能不同。这是相对路径文件名的正常行为。
-- 建议离线和实时流分别使用不同级别目录下的 `SPP.exe`：离线用 `SPP\SPP` 这一级，实时流用上一级 `SPP` 这一级。这样两种模式都会生成的 `observations1.txt`、`satpos1.txt`、`spp_solution.txt` 不会互相覆盖，便于对照分析。
+观测单位为伪距 P：m、载波 L：周、多普勒 D：Hz、SNR：dB-Hz。任务 2 输出中的 `L` 向量已统一为米。
 
-当前代码在离线和实时模式都会输出：
+**输出文件名当前固定使用 `_3_1` 后缀，切换到 `20240303` 输入也不会自动改名。** 再次运行会覆盖工作目录中的同名文件；比较两组数据时，应在下一次运行前保存并重命名结果，或在不同工作目录中使用绝对输入路径运行。
 
-```text
-observations1.txt
-satpos1.txt
-spp_solution.txt
-```
+控制台会输出 `SYNC`、`COMMON`、`SPP` 摘要，结束时统计同步历元、两站跳过历元、两站 SPP 成功历元、有效准备历元、成功构模及跳过构模历元。当前没有输出 RTK 基线估值、浮点/固定状态或 Ratio。
 
-实时模式还会额外输出：
+## 检查与参考对比
 
-```text
-stream.txt
-realtime_raw_oem.log
-```
+按课程要求先检查零基线，再检查短基线：
 
-### `observations1.txt`
+1. 使用各数据目录下的 `RINEX/base.obs`、`RINEX/rove.obs` 检查解码历元、卫星号、频点、观测值和单位。
+2. 使用 `res/` 中的两站 SPP 参考结果，按 GPS 周和周内秒核对概略位置。
+3. 检查共视卫星、参考星、双差符号、行列映射以及 `B`、`L`，对比参考 `RTKInfo.txt` 时先统一历元、卫星集合、参考星和线性化坐标。
+4. 完成任务 3–5 后，再与 `res/RTKRes.txt` 对比基线、定位误差、固定状态及 Ratio。
 
-输出每个历元解码出的观测值，主要用于检查解码是否正常。
+数据包的 `res/RTKRes.txt` 和 `res/RTKInfo.txt` 是课程参考结果，不能作为当前程序已经得到固定解的依据。
 
-字段大致为：
+任务 2 已提供独立测试源码，覆盖六种系统/频点组合、已知模糊度、坐标偏导有限差分、观测排序、各站不同卫星位置、GEO 参考星规则、失败输入、秩亏几何和导出映射。编译与回放方法见 [任务 2 验证说明](tests/README.md)。
 
-```text
-week sow sat P L D SNR
-```
+## 课件依据
 
-其中：
+本说明对应同级 `课件/` 目录中的以下材料：
 
-- `P`：伪距，单位 m
-- `L`：载波相位，单位周
-- `D`：多普勒，单位 Hz
-- `SNR`：信噪比，单位 dB-Hz
-
-### `satpos1.txt`
-
-低频抽样输出接收时刻的广播星历卫星位置，方便和参考卫星位置文件对照。
-
-注意：这个文件输出的是“接收时刻广播星历结果”；SPP 解算内部使用的是经过发射时刻和地球自转改正后的卫星状态。
-
-### `spp_solution.txt`
-
-输出单点定位和测速结果，主要用于精度分析。
-
-主要字段包括：
-
-```text
-Wk SOW
-ECEF-X ECEF-Y ECEF-Z
-REF-ECEF-X REF-ECEF-Y REF-ECEF-Z
-EAST NORTH UP
-B L H
-VX VY VZ
-PDOP SigmaP SigmaV
-GS BS n
-```
-
-其中：
-
-- `EAST/NORTH/UP`：相对参考坐标的 ENU 误差
-- `B/L/H`：大地坐标
-- `VX/VY/VZ`：接收机速度
-- `GS`：参与解算的 GPS 卫星数
-- `BS`：参与解算的 BDS 卫星数
-- `n`：当前历元成功计算出卫星状态的 GPS/BDS 卫星数
-
-### `realtime_raw_oem.log`
-
-实时模式下保存接收到的有效 OEM4 观测/星历报文，后续可以作为离线文件回放。
-
-### `stream.txt`
-
-实时模式下保存控制台实时解算摘要，内容与控制台输出一致，格式类似：
-
-```text
-Wk 2421 SOW 42124.000 XYZ ... ENU ... n=23 PDOP=1.144
-```
-
-它比 `spp_solution.txt` 更简洁，适合实时观察。
-
-## 离线对比参考文件
-
-根目录下额外放了 3 个参考结果文件，用于离线运行后对照检查程序输出是否合理。
-
-### `NovatelOEM20211114-01.obs`
-
-参考观测值文件，用于和程序输出的 `observations1.txt` 对比。
-
-主要检查内容：
-
-- 历元时间是否一致
-- 卫星号是否一致
-- 伪距、载波、多普勒、信噪比是否在合理范围
-- 是否出现明显缺频或错误卫星号
-
-### `NovatelOEM20211114-01.pos`
-
-参考定位结果文件，用于和程序输出的 `spp_solution.txt` 对比。
-
-主要检查内容：
-
-- `Wk`、`SOW` 历元是否对齐
-- `ECEF-X/Y/Z` 是否接近
-- `EAST/NORTH/UP` 误差变化趋势是否一致
-- `PDOP` 和用星数是否在合理范围
-
-程序中的离线参考坐标 `OFFLINE_REF_X/OFFLINE_REF_Y/OFFLINE_REF_Z` 与该 `.pos` 文件中的 `REF-ECEF` 保持一致，因此离线结果的 ENU 误差可以直接用于精度分析。实时流使用另一组测站参考坐标 `STREAM_REF_X/STREAM_REF_Y/STREAM_REF_Z`。
-
-### `广播星历计算结果 - 241015.txt`
-
-参考广播星历卫星位置文件，用于和程序输出的 `satpos1.txt` 对比。
-
-主要检查内容：
-
-- 历元是否按相同间隔抽样
-- 卫星号是否一致
-- 卫星位置、速度、钟差、钟速是否接近
-
-注意：`satpos1.txt` 输出的是接收时刻的广播星历卫星状态，主要用于和该参考文件做格式和数值对照；SPP 解算内部使用的是发射时刻并经过地球自转改正后的卫星状态。
-
-## 重要算法说明
-
-### 1. GPS/BDS 时间系统
-
-观测历元按 GPST 组织。GPS 星历直接使用 GPST 计算。BDS 星历原始 toe/toc 属于 BDT，解码时会保存原始 BDT 秒，同时转换为 GPST，方便与观测历元求时间差。
-
-### 2. 卫星发射时刻
-
-SPP 不直接使用接收时刻卫星位置，而是：
-
-```text
-PIF / c 得到近似传播时间
--> 得到近似发射时刻
--> 计算卫星钟差
--> 修正发射时刻
--> 重新计算卫星位置、速度、钟差、钟速
--> 做地球自转改正
-```
-
-### 3. TGD 改正
-
-卫星钟差计算中不改 TGD。TGD 在 `GetPIF()` 中按伪距组合处理：
-
-- GPS L1/L2 IF 组合不额外改 TGD
-- BDS B1I/B3I IF 组合中处理 BDS TGD
-
-### 4. 质量控制
-
-SPP 使用统一筛选函数 `PassSppBasicCheck()`，主要检查：
-
-- 只使用 GPS/BDS
-- 双频伪距有效
-- 星历有效
-- 卫星位置有效
-- SNR 不低于 30 dB-Hz
-- 高度角不低于 10 度
-
-## 常见问题
-
-### PowerShell 提示找不到程序
-
-错误示例：
-
-```powershell
-\x64\Debug\SPP.exe --stream
-```
-
-PowerShell 不会默认从当前目录查找程序，应写成：
-
-```powershell
-.\x64\Debug\SPP.exe --stream
-```
-
-### 实时模式出现 `time/stat skip`
-
-类似输出：
-
-```text
-time/stat skip type=218 week=0 tow=0.000 stat=20
-```
-
-这表示收到的某些 OEM4 报文时间状态无效，程序跳过它们是正常的。只要后面持续输出 `Wk/SOW/XYZ/ENU/n/PDOP`，说明实时解算正在正常运行。
-
-### 实时模式 ENU 误差较大
-
-当前 ENU 是相对代码中的固定参考坐标计算(-2267810.173，5009324.109，3221016.632)的。如果实时流接收机位置不是该参考点，ENU 出现十几米或几十米是正常现象，不一定代表定位算法异常。
+- `卫星导航算法与程序设计II-实习任务1-V2.pptx`：两站数据准备、时间同步及筛选阈值。
+- `卫星导航算法与程序设计II-实习任务2 V2.pptx`：双差非组合函数模型与系统/频点配置要求。
+- `卫星导航算法与程序设计II-实习任务3.pptx`：随机模型与双差协方差传播。
+- `卫星导航算法与程序设计II-实习任务4 V3.pptx`：单历元与逐历元参数估计。
+- `卫星导航算法与程序设计II-实习任务5 - JH - V3.pptx`：LAMBDA 模糊度固定与位置更新。
