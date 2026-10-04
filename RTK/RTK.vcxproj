@@ -139,8 +139,9 @@
     </ClCompile>
     <ClCompile Include="matrix.cpp" />
     <ClCompile Include="obs.cpp" />
-    <ClCompile Include="rtk_model.cpp" />
+    <ClCompile Include="rtk_mathematical_model.cpp" />
     <ClCompile Include="rtk_prepare.cpp" />
+    <ClCompile Include="rtk_stochastic_model.cpp" />
     <ClCompile Include="satpos.cpp" />
     <ClCompile Include="spp.cpp" />
     <ClCompile Include="spp_main.cpp">
@@ -157,8 +158,9 @@
     <ClInclude Include="error_correction.h" />
     <ClInclude Include="matrix.h" />
     <ClInclude Include="obs.h" />
-    <ClInclude Include="rtk_model.h" />
+    <ClInclude Include="rtk_mathematical_model.h" />
     <ClInclude Include="rtk_prepare.h" />
+    <ClInclude Include="rtk_stochastic_model.h" />
     <ClInclude Include="satpos.h" />
     <ClInclude Include="spp.h" />
     <ClInclude Include="station_satpos.h" />

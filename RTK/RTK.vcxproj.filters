@@ -54,7 +54,10 @@
     <ClCompile Include="station_satpos.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="rtk_model.cpp">
+    <ClCompile Include="rtk_mathematical_model.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="rtk_stochastic_model.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
@@ -95,7 +98,10 @@
     <ClInclude Include="station_satpos.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="rtk_model.h">
+    <ClInclude Include="rtk_mathematical_model.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="rtk_stochastic_model.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

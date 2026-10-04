@@ -5,7 +5,8 @@
 #include "error_correction.h"
 #include "spp.h"
 #include "rtk_prepare.h"
-#include "rtk_model.h"
+#include "rtk_mathematical_model.h"
+#include "rtk_stochastic_model.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -61,9 +62,11 @@ int main(int argc,char*argv[])
 	ofstream prepared_out("rtk_prepared_3_1.txt");
 	//任务二：输出每个有效历元的参考星、行列映射、B矩阵和L向量
 	ofstream model_out("rtk_function_model_3_1.txt");
+	//任务三：按任务二的观测行序保存方差阵D、权阵P及定权参数
+	ofstream stochastic_out("rtk_stochastic_model_Elevation_3_1.txt");
 	//输出文件创建失败返回错误信息
 	if (!base_obs_out.is_open() || !rover_obs_out.is_open() ||
-		!prepared_out.is_open() || !model_out.is_open())
+		!prepared_out.is_open() || !model_out.is_open() || !stochastic_out.is_open())
 	{
 		cerr << "Cannot open one or more output files" << endl;
 		fclose(base_fp);
@@ -78,6 +81,10 @@ int main(int argc,char*argv[])
 	rtk_model_options_t model_options;
 	model_options.frequency_count = 2;
 	rtk_function_model_t function_model;
+	//默认等方差，伪距/相位方差比10000；可改为Elevation使用两站各自高度角
+	rtk_stochastic_options_t stochastic_options;
+	stochastic_options.method = RtkWeightingMethod::Elevation;
+	rtk_stochastic_model_t stochastic_model;
 
 	bool output_failed = false;
 	//读取首个历元并且写入每个站的观测数据
@@ -95,6 +102,8 @@ int main(int argc,char*argv[])
 	//任务二：成功构模并写入文件的历元，以及未能构模的历元
 	int model_epochs = 0;
 	int model_failed_epochs = 0;
+	int stochastic_epochs = 0;
+	int stochastic_failed_epochs = 0;
 	//为共同历元创建结构体
 	rtk_epoch_t* rtk_epoch = new rtk_epoch_t();
 	//遍历所有历元
@@ -152,6 +161,26 @@ int main(int argc,char*argv[])
 						break;
 					}
 					model_epochs++;
+					//只有任务二成功后才能构建任务三，保证历元、参考星和观测顺序一致
+					if (BuildRtkStochasticModel(*rtk_epoch, function_model,
+						stochastic_options, stochastic_model))
+					{
+						if (!WriteRtkStochasticModel(stochastic_out, stochastic_model))
+						{
+							output_failed = true;
+							cerr << "Failed to write stochastic model at epoch "
+								<< rtk_epoch->time.week << ' ' << rtk_epoch->time.sec << endl;
+							break;
+						}
+						stochastic_epochs++;
+					}
+					else
+					{
+						stochastic_failed_epochs++;
+						cerr << "Stochastic model skipped at epoch "
+							<< rtk_epoch->time.week << ' ' << rtk_epoch->time.sec
+							<< ": " << stochastic_model.error_message << endl;
+					}
 				}
 				else
 				{
@@ -210,6 +239,13 @@ int main(int argc,char*argv[])
 		output_failed = true;
 		cerr << "Failed to close function model output after writing" << endl;
 	}
+	//检查任务三输出缓冲区最终写入是否成功
+	stochastic_out.close();
+	if (!stochastic_out)
+	{
+		output_failed = true;
+		cerr << "Failed to close stochastic model output after writing" << endl;
+	}
 	//销毁rtk结构体
 	delete rtk_epoch;
 	//打印结果
@@ -224,12 +260,17 @@ int main(int argc,char*argv[])
 	cout << "Prepared epochs: " << prepared_epochs << endl;
 	cout << "Function model epochs: " << model_epochs << endl;
 	cout << "Function model skipped epochs: " << model_failed_epochs << endl;
+	cout << "Stochastic model epochs: " << stochastic_epochs << endl;
+	cout << "Stochastic model skipped epochs: " << stochastic_failed_epochs << endl;
+	cout << "Stochastic weighting: "
+		<< (stochastic_options.method == RtkWeightingMethod::EqualVariance ? "EQUAL" : "ELEVATION")
+		<< " code/phase variance ratio=" << stochastic_options.code_phase_variance_ratio << endl;
 	cout << "Function model mode: GPS=" << model_options.use_gps
 		<< " BDS=" << model_options.use_bds
 		<< " frequencies=" << model_options.frequency_count << endl;
 	cout << "Output files: base_observations_3_1.txt, "
 		<< "rover_observations_3_1.txt, rtk_prepared_3_1.txt, "
-		<< "rtk_function_model_3_1.txt" << endl;
+		<< "rtk_function_model_3_1.txt, rtk_stochastic_model_3_1.txt" << endl;
 	//关闭文件
 	fclose(base_fp);
 	fclose(rover_fp);
