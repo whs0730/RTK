@@ -18,6 +18,9 @@ struct rtk_model_options_t
     bool use_bds = true;
     int frequency_count = 2;       // 1：L1/B1I，2：L1/L2和B1I/B3I
     bool exclude_bds_geo_reference = true;
+    // 有已知基站坐标时用于几何计算；关闭时保持原来的SPP概略坐标方式。
+    bool use_known_base_xyz = false;
+    double known_base_xyz[3]{};    // ECEF XYZ，单位m；不覆盖epoch.base_spp
 };
 
 // 记录B和L中每一行对应哪条双差观测
@@ -59,6 +62,7 @@ struct rtk_function_model_t
     int double_difference_count = 0; // 非参考星对数，不乘频点/观测类型
     double time_diff = 0.0;        // 基准站接收时刻减流动站接收时刻，s
     double base_xyz[3]{};          // 基准站坐标作为已知量，m
+    bool base_xyz_is_known = false; // 区分已知基站坐标与SPP概略坐标
     double rover_xyz[3]{};         // 流动站线性化展开点，m
 
     Matrix B;                       // 设计矩阵
@@ -76,6 +80,7 @@ struct rtk_function_model_t
 // dX/dY/dZ为坐标改正(m)，N_DD为本历元的绝对双差模糊度(cycle)。
 // L为原始双差观测减双差几何距离，未扣除任何模糊度初值，单位统一为m。
 // 各站使用epoch.common中各自的卫星位置；输入epoch不被修改。
+// 基站几何坐标由options选择；流动站展开点始终使用调用者传入的rover_xyz。
 // 行序：GPS相位f0/f1、GPS伪距f0/f1，再BDS相位f0/f1、BDS伪距f0/f1。
 // 每块按sat排序；单频时省去f1。默认保留双系统双频接口。
 bool BuildRtkFunctionModel(

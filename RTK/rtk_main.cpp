@@ -17,6 +17,10 @@
 using namespace std;
 static const char* DEFAULT_INPUT_BASE_FILE = R"(OEM7data\20240301\base.log)";
 static const char* DEFAULT_INPUT_ROVER_FILE = R"(OEM7data\20240301\rove.log)";
+// OEM7data/readme.txt：20240301和20240303两组算例的已知基准站ECEF坐标，单位m。
+// 换其他基站数据时修改此处；没有已知坐标则将USE_KNOWN_BASE_XYZ设为false。
+static const bool USE_KNOWN_BASE_XYZ = true;
+static const double KNOWN_BASE_XYZ[3] = { -2267808.6227, 5009324.7699, 3221016.8928 };
 static const char* DEFAULT_STREAM_IP = "8.148.22.229";
 static const unsigned short DEFAULT_STREAM_PORT = 7003;
 static void ParseCommandLine(
@@ -80,6 +84,11 @@ int main(int argc,char*argv[])
 	//任务二的系统/频点选项；改成1可构建双系统单频模型
 	rtk_model_options_t model_options;
 	model_options.frequency_count = 2;
+	model_options.use_known_base_xyz = USE_KNOWN_BASE_XYZ;
+	for (int axis = 0; axis < 3; ++axis)
+	{
+		model_options.known_base_xyz[axis] = KNOWN_BASE_XYZ[axis];
+	}
 	rtk_function_model_t function_model;
 	//默认等方差，伪距/相位方差比10000；可改为Elevation使用两站各自高度角
 	rtk_stochastic_options_t stochastic_options;
@@ -149,7 +158,7 @@ int main(int argc,char*argv[])
 					break;
 				}
 				prepared_epochs++;
-				//流动站SPP坐标作为线性化展开点；基准站坐标由epoch提供
+				//流动站用本程序SPP展开点，基站用已知坐标；epoch中的两站SPP结果不覆盖
 				if (BuildRtkFunctionModel(*rtk_epoch, rtk_epoch->rover_spp.XYZ,
 					config, model_options, function_model))
 				{
@@ -268,6 +277,8 @@ int main(int argc,char*argv[])
 	cout << "Function model mode: GPS=" << model_options.use_gps
 		<< " BDS=" << model_options.use_bds
 		<< " frequencies=" << model_options.frequency_count << endl;
+	cout << "Base coordinate source: "
+		<< (model_options.use_known_base_xyz ? "KNOWN" : "SPP") << endl;
 	cout << "Output files: base_observations_3_1.txt, "
 		<< "rover_observations_3_1.txt, rtk_prepared_3_1.txt, "
 		<< "rtk_function_model_3_1.txt, rtk_stochastic_model_3_1.txt" << endl;

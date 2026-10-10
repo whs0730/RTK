@@ -106,7 +106,9 @@ static bool IsBdsGeo(int sat)
 
 // 第一步：逐颗检查共视观测，计算站间单差和流动站坐标偏导。
 // 结构/时刻/坐标错误返回false；高度角或观测质量不达标则跳过该颗卫星。
-static bool ComputeSingleDifference(const rtk_epoch_t& epoch,const double rover_xyz[3], const rtk_config_t& config,const rtk_model_options_t& options, vector<sd_obs_t>& sd,string& error)
+static bool ComputeSingleDifference(const rtk_epoch_t& epoch, const double base_xyz[3],
+    const double rover_xyz[3], const rtk_config_t& config, const rtk_model_options_t& options,
+    vector<sd_obs_t>& sd, string& error)
 {
     // 不压缩数组，保证sd[i]始终对应epoch.common[i]。
     sd.resize(epoch.ncommon);
@@ -172,7 +174,7 @@ static bool ComputeSingleDifference(const rtk_epoch_t& epoch,const double rover_
         }
 
         // 基准站坐标在本模型中视为已知量，只估计流动站坐标改正。
-        const double base_range = GeometricRange(epoch.base_spp.XYZ, item.base_sat.pos);
+        const double base_range = GeometricRange(base_xyz, item.base_sat.pos);
         const double rover_range = GeometricRange(rover_xyz, item.rover_sat.pos);
         if (!isfinite(base_range) || !isfinite(rover_range) ||base_range <= 1.0 || rover_range <= 1.0)
         {
@@ -541,6 +543,16 @@ bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],
         return Fail(model, "SPP/linearization coordinates are not valid");
 
     }
+    // SPP解仅是原始处理结果；RTK几何计算可独立使用数据包给出的已知基站坐标。
+    const double* base_xyz = epoch.base_spp.XYZ;
+    if (options.use_known_base_xyz)
+    {
+        if (!ValidXYZ(options.known_base_xyz))
+        {
+            return Fail(model, "Known base coordinates are not valid");
+        }
+        base_xyz = options.known_base_xyz;
+    }
     if (!ValidTime(epoch.time) || !ValidTime(epoch.base_obs.data[0].time) ||
         !ValidTime(epoch.rover_obs.data[0].time) ||
         fabs(timediff(epoch.base_obs.data[0].time, epoch.time)) >= config.sync_tolerance ||
@@ -553,7 +565,7 @@ bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],
     // 1. 形成站间单差；2. 分系统选择参考星，并检查三维几何是否可解。
     vector<sd_obs_t> sd;
     string error;
-    if (!ComputeSingleDifference(epoch, rover_xyz, config, options, sd, error))
+    if (!ComputeSingleDifference(epoch, base_xyz, rover_xyz, config, options, sd, error))
         return Fail(model, error);
     vector<system_group_t> groups;
     if (!BuildGroups(sd, options, groups, error))
@@ -565,7 +577,8 @@ bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],
     model.time = epoch.time;
     model.time_diff = timediff(epoch.base_obs.data[0].time, epoch.rover_obs.data[0].time);
     model.frequency_count = options.frequency_count;
-    copy_n(epoch.base_spp.XYZ, 3, model.base_xyz);
+    copy_n(base_xyz, 3, model.base_xyz);
+    model.base_xyz_is_known = options.use_known_base_xyz;
     copy_n(rover_xyz, 3, model.rover_xyz);
     BuildRowAndColumnLayout(groups, sd, options.frequency_count, model);
     BuildDesignMatrix(sd, model);
@@ -594,6 +607,7 @@ bool WriteRtkFunctionModel(ostream& out, const rtk_function_model_t& model)
         << " frequencies=" << model.frequency_count << " dd_pairs=" << model.double_difference_count << '\n';
     out << "CONVENTION SD=rover-base DD=sat-reference L_unit=m N_unit=cycle\n";
     out << "BASE_XYZ_m " << model.base_xyz[0] << ' ' << model.base_xyz[1] << ' ' << model.base_xyz[2] << '\n';
+    out << "BASE_POSITION_SOURCE " << (model.base_xyz_is_known ? "KNOWN" : "SPP") << '\n';
     out << "ROVER_LINEARIZATION_XYZ_m " << model.rover_xyz[0] << ' ' << model.rover_xyz[1] << ' ' << model.rover_xyz[2] << '\n';
     out << "REFERENCE GPS=" << (model.gps_reference_sat ? sat2id(model.gps_reference_sat) : "NONE")
         << " BDS=" << (model.bds_reference_sat ? sat2id(model.bds_reference_sat) : "NONE")
