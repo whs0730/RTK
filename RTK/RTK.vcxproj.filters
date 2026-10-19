@@ -60,6 +60,9 @@
     <ClCompile Include="rtk_stochastic_model.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="rtk_estimation.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="timeTransform.h">
@@ -102,6 +105,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="rtk_stochastic_model.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="rtk_estimation.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

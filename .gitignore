@@ -37,3 +37,4 @@ realtime_raw_oem.log
 SPP/observations1.txt
 SPP/satpos1.txt
 SPP/spp_solution.txt
+.ai-memory.toml

@@ -7,6 +7,7 @@
 #include "rtk_prepare.h"
 #include "rtk_mathematical_model.h"
 #include "rtk_stochastic_model.h"
+#include "rtk_estimation.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -68,9 +69,12 @@ int main(int argc,char*argv[])
 	ofstream model_out("rtk_function_model_3_1.txt");
 	//任务三：按任务二的观测行序保存方差阵D、权阵P及定权参数
 	ofstream stochastic_out("rtk_stochastic_model_Elevation_3_1.txt");
+	ofstream estimation_out("rtk_estimation_3_1.txt");
+	ofstream solution_out("rtk_float_3_1.csv");
 	//输出文件创建失败返回错误信息
 	if (!base_obs_out.is_open() || !rover_obs_out.is_open() ||
-		!prepared_out.is_open() || !model_out.is_open() || !stochastic_out.is_open())
+		!prepared_out.is_open() || !model_out.is_open() || !stochastic_out.is_open() ||
+		!estimation_out.is_open() || !solution_out.is_open() || !WriteRtkSolutionCsvHeader(solution_out))
 	{
 		cerr << "Cannot open one or more output files" << endl;
 		fclose(base_fp);
@@ -90,10 +94,14 @@ int main(int argc,char*argv[])
 		model_options.known_base_xyz[axis] = KNOWN_BASE_XYZ[axis];
 	}
 	rtk_function_model_t function_model;
-	//默认等方差，伪距/相位方差比10000；可改为Elevation使用两站各自高度角
+	//主流程使用高度角定权，伪距/相位方差比10000
 	rtk_stochastic_options_t stochastic_options;
 	stochastic_options.method = RtkWeightingMethod::Elevation;
 	rtk_stochastic_model_t stochastic_model;
+	//任务四默认动态EKF；LeastSquares为历元间完全独立的浮点最小二乘
+	rtk_estimation_options_t estimation_options;
+	rtk_filter_state_t filter;
+	rtk_solution_t solution;
 
 	bool output_failed = false;
 	//读取首个历元并且写入每个站的观测数据
@@ -113,6 +121,8 @@ int main(int argc,char*argv[])
 	int model_failed_epochs = 0;
 	int stochastic_epochs = 0;
 	int stochastic_failed_epochs = 0;
+	int estimation_epochs = 0;
+	int estimation_failed_epochs = 0;
 	//为共同历元创建结构体
 	rtk_epoch_t* rtk_epoch = new rtk_epoch_t();
 	//遍历所有历元
@@ -182,6 +192,25 @@ int main(int argc,char*argv[])
 							break;
 						}
 						stochastic_epochs++;
+						if (EstimateRtkEpoch(*rtk_epoch, config, model_options, stochastic_options,
+							estimation_options, filter, solution))
+						{
+							if (!WriteRtkSolution(estimation_out, solution) || !WriteRtkSolutionCsv(solution_out, solution))
+							{
+								output_failed = true;
+								cerr << "Failed to write RTK float solution at " << rtk_epoch->time.sec << endl;
+								break;
+							}
+							++estimation_epochs;
+							cout << "RTK FLOAT week=" << solution.time.week << " sow=" << solution.time.sec
+								<< " baseline_m=" << solution.baseline_xyz[0] << ' ' << solution.baseline_xyz[1]
+								<< ' ' << solution.baseline_xyz[2] << " carried_N=" << solution.carried_ambiguities << endl;
+						}
+						else
+						{
+							++estimation_failed_epochs;
+							cerr << "RTK estimation skipped at " << rtk_epoch->time.sec << ": " << solution.error_message << endl;
+						}
 					}
 					else
 					{
@@ -255,6 +284,13 @@ int main(int argc,char*argv[])
 		output_failed = true;
 		cerr << "Failed to close stochastic model output after writing" << endl;
 	}
+	estimation_out.close();
+	solution_out.close();
+	if (!estimation_out || !solution_out)
+	{
+		output_failed = true;
+		cerr << "Failed to close RTK estimation output after writing" << endl;
+	}
 	//销毁rtk结构体
 	delete rtk_epoch;
 	//打印结果
@@ -271,6 +307,10 @@ int main(int argc,char*argv[])
 	cout << "Function model skipped epochs: " << model_failed_epochs << endl;
 	cout << "Stochastic model epochs: " << stochastic_epochs << endl;
 	cout << "Stochastic model skipped epochs: " << stochastic_failed_epochs << endl;
+	cout << "RTK float solution epochs: " << estimation_epochs << endl;
+	cout << "RTK estimation skipped epochs: " << estimation_failed_epochs << endl;
+	cout << "RTK estimator: " << (estimation_options.method == RtkEstimationMethod::ExtendedKalman ? "EKF" : "LS")
+		<< " positioning=" << (estimation_options.kinematic ? "KINEMATIC" : "STATIC") << endl;
 	cout << "Stochastic weighting: "
 		<< (stochastic_options.method == RtkWeightingMethod::EqualVariance ? "EQUAL" : "ELEVATION")
 		<< " code/phase variance ratio=" << stochastic_options.code_phase_variance_ratio << endl;
@@ -281,7 +321,8 @@ int main(int argc,char*argv[])
 		<< (model_options.use_known_base_xyz ? "KNOWN" : "SPP") << endl;
 	cout << "Output files: base_observations_3_1.txt, "
 		<< "rover_observations_3_1.txt, rtk_prepared_3_1.txt, "
-		<< "rtk_function_model_3_1.txt, rtk_stochastic_model_3_1.txt" << endl;
+		<< "rtk_function_model_3_1.txt, rtk_stochastic_model_Elevation_3_1.txt, "
+		<< "rtk_estimation_3_1.txt, rtk_float_3_1.csv" << endl;
 	//关闭文件
 	fclose(base_fp);
 	fclose(rover_fp);
