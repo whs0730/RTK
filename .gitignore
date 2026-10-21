@@ -21,7 +21,7 @@ OEM7data/
 # 默认忽略运行生成的日志和结果文件。
 *.log
 *.txt
-
+*.csv
 # 允许提交课程演示用的离线样例数据和参考对比文件。
 !SPP/NovatelOEM20211114-01.log
 !SPP/NovatelOEM20211114-02.log
@@ -38,3 +38,5 @@ SPP/observations1.txt
 SPP/satpos1.txt
 SPP/spp_solution.txt
 .ai-memory.toml
+AGENTS.md
+HANDOFF.md

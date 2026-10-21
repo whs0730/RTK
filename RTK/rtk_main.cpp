@@ -8,6 +8,7 @@
 #include "rtk_mathematical_model.h"
 #include "rtk_stochastic_model.h"
 #include "rtk_estimation.h"
+#include "rtk_ambiguity_resolution.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -69,12 +70,17 @@ int main(int argc,char*argv[])
 	ofstream model_out("rtk_function_model_3_1.txt");
 	//任务三：按任务二的观测行序保存方差阵D、权阵P及定权参数
 	ofstream stochastic_out("rtk_stochastic_model_Elevation_3_1.txt");
+	//任务四：按输出任务四结果
 	ofstream estimation_out("rtk_estimation_3_1.txt");
 	ofstream solution_out("rtk_float_3_1.csv");
+	//任务五 ：输出周跳检测结果
+	ofstream ambiguity_out("rtk_ambiguity_3_1.txt");
+	ofstream resolved_out("rtk_solution_3_1.csv");
 	//输出文件创建失败返回错误信息
 	if (!base_obs_out.is_open() || !rover_obs_out.is_open() ||
 		!prepared_out.is_open() || !model_out.is_open() || !stochastic_out.is_open() ||
-		!estimation_out.is_open() || !solution_out.is_open() || !WriteRtkSolutionCsvHeader(solution_out))
+		!estimation_out.is_open() || !solution_out.is_open() || !WriteRtkSolutionCsvHeader(solution_out) ||
+		!ambiguity_out.is_open() || !resolved_out.is_open() || !WriteRtkAmbiguitySolutionCsvHeader(resolved_out))
 	{
 		cerr << "Cannot open one or more output files" << endl;
 		fclose(base_fp);
@@ -102,6 +108,8 @@ int main(int argc,char*argv[])
 	rtk_estimation_options_t estimation_options;
 	rtk_filter_state_t filter;
 	rtk_solution_t solution;
+	rtk_ambiguity_options_t ambiguity_options;
+	rtk_ambiguity_solution_t resolved_solution;
 
 	bool output_failed = false;
 	//读取首个历元并且写入每个站的观测数据
@@ -123,6 +131,8 @@ int main(int argc,char*argv[])
 	int stochastic_failed_epochs = 0;
 	int estimation_epochs = 0;
 	int estimation_failed_epochs = 0;
+	int fixed_epochs = 0;
+	int ambiguity_failed_epochs = 0;
 	//为共同历元创建结构体
 	rtk_epoch_t* rtk_epoch = new rtk_epoch_t();
 	//遍历所有历元
@@ -201,6 +211,21 @@ int main(int argc,char*argv[])
 								cerr << "Failed to write RTK float solution at " << rtk_epoch->time.sec << endl;
 								break;
 							}
+							// 固定结果只用于当前历元输出，filter继续传递任务四的浮点状态。
+							if (!ResolveRtkAmbiguities(solution, ambiguity_options, resolved_solution))
+							{
+								++ambiguity_failed_epochs;
+								cerr << "RTK ambiguity resolution retained FLOAT at " << solution.time.sec
+									<< ": " << resolved_solution.error_message << endl;
+							}
+							if (!WriteRtkAmbiguitySolution(ambiguity_out, resolved_solution) ||
+								!WriteRtkAmbiguitySolutionCsv(resolved_out, resolved_solution))
+							{
+								output_failed = true;
+								cerr << "Failed to write RTK ambiguity solution at " << solution.time.sec << endl;
+								break;
+							}
+							if (resolved_solution.fixed) ++fixed_epochs;
 							++estimation_epochs;
 							cout << "RTK FLOAT week=" << solution.time.week << " sow=" << solution.time.sec
 								<< " baseline_m=" << solution.baseline_xyz[0] << ' ' << solution.baseline_xyz[1]
@@ -291,6 +316,13 @@ int main(int argc,char*argv[])
 		output_failed = true;
 		cerr << "Failed to close RTK estimation output after writing" << endl;
 	}
+	ambiguity_out.close();
+	resolved_out.close();
+	if (!ambiguity_out || !resolved_out)
+	{
+		output_failed = true;
+		cerr << "Failed to close RTK ambiguity output after writing" << endl;
+	}
 	//销毁rtk结构体
 	delete rtk_epoch;
 	//打印结果
@@ -309,6 +341,9 @@ int main(int argc,char*argv[])
 	cout << "Stochastic model skipped epochs: " << stochastic_failed_epochs << endl;
 	cout << "RTK float solution epochs: " << estimation_epochs << endl;
 	cout << "RTK estimation skipped epochs: " << estimation_failed_epochs << endl;
+	cout << "RTK fixed solution epochs: " << fixed_epochs << endl;
+	cout << "RTK ambiguity resolution failed epochs: " << ambiguity_failed_epochs << endl;
+	cout << "RTK ratio threshold: " << ambiguity_options.ratio_threshold << endl;
 	cout << "RTK estimator: " << (estimation_options.method == RtkEstimationMethod::ExtendedKalman ? "EKF" : "LS")
 		<< " positioning=" << (estimation_options.kinematic ? "KINEMATIC" : "STATIC") << endl;
 	cout << "Stochastic weighting: "
@@ -322,7 +357,7 @@ int main(int argc,char*argv[])
 	cout << "Output files: base_observations_3_1.txt, "
 		<< "rover_observations_3_1.txt, rtk_prepared_3_1.txt, "
 		<< "rtk_function_model_3_1.txt, rtk_stochastic_model_Elevation_3_1.txt, "
-		<< "rtk_estimation_3_1.txt, rtk_float_3_1.csv" << endl;
+		<< "rtk_estimation_3_1.txt, rtk_float_3_1.csv, rtk_ambiguity_3_1.txt, rtk_solution_3_1.csv" << endl;
 	//关闭文件
 	fclose(base_fp);
 	fclose(rover_fp);

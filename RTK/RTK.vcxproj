@@ -143,6 +143,7 @@
     <ClCompile Include="rtk_prepare.cpp" />
     <ClCompile Include="rtk_stochastic_model.cpp" />
     <ClCompile Include="rtk_estimation.cpp" />
+    <ClCompile Include="rtk_ambiguity_resolution.cpp" />
     <ClCompile Include="satpos.cpp" />
     <ClCompile Include="spp.cpp" />
     <ClCompile Include="spp_main.cpp">
@@ -163,6 +164,7 @@
     <ClInclude Include="rtk_prepare.h" />
     <ClInclude Include="rtk_stochastic_model.h" />
     <ClInclude Include="rtk_estimation.h" />
+    <ClInclude Include="rtk_ambiguity_resolution.h" />
     <ClInclude Include="satpos.h" />
     <ClInclude Include="spp.h" />
     <ClInclude Include="station_satpos.h" />
