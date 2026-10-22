@@ -221,6 +221,30 @@ bool PassRtkObservationCheck(
 	return base_azel[1] >= mask_rad &&rover_azel[1] >= mask_rad;
 }
 
+// 从两站已收到的星历中选取对两站观测时刻都最近的一套；同龄时固定优先基站。
+// 卫星状态计算函数继续检查7200 s有效期，不把共同星历写回任一站的SPP缓存。
+static const eph_t* SelectRtkEphemeris(const nav_t& base_nav, const nav_t& rover_nav,
+	int sat, const gtime_t& base_time, const gtime_t& rover_time)
+{
+	const eph_t* selected = nullptr;
+	double best_age = 0.0;
+	for (const nav_t* nav : { &base_nav, &rover_nav })
+	{
+		for (const auto& eph : nav->eph)
+		{
+			if (eph.sat != sat || !has_valid_eph(&eph) || !isfinite(eph.sqrtA)) continue;
+			const double age = max(fabs(timediff(base_time, eph.toe)), fabs(timediff(rover_time, eph.toe)));
+			if (!isfinite(age)) continue;
+			if (selected == nullptr || age < best_age)
+			{
+				selected = &eph;
+				best_age = age;
+			}
+		}
+	}
+	return selected;
+}
+
 bool BuildRtkEpoch(const station_state_t& base,const station_state_t& rover,const rtk_config_t& config,rtk_epoch_t& epoch)
 {
 	epoch = rtk_epoch_t();
@@ -261,6 +285,20 @@ bool BuildRtkEpoch(const station_state_t& base,const station_state_t& rover,cons
 			rover_index[sat] = j;
 		}
 	}
+	// 两站广播星历报文可能不在同一秒到达。RTK必须使用同一套星历，
+	// 再按各站观测分别求发射时刻和自转改正，不能直接复制另一站的卫星坐标。
+	nav_t shared_nav{};
+	for (int i = 0; i < base.raw.obs.n; ++i)
+	{
+		const int sat = base.raw.obs.data[i].sat;
+		if (sat < 1 || sat > MAXSAT || rover_index[sat] < 0) continue;
+		const eph_t* eph = SelectRtkEphemeris(base.raw.nav, rover.raw.nav, sat, base_time, rover_time);
+		if (eph != nullptr) shared_nav.eph[sat - 1] = *eph;
+	}
+	satpos_t base_sats[MAXOBS]{};
+	satpos_t rover_sats[MAXOBS]{};
+	CaculateSatellitePositions(epoch.base_obs.data, epoch.base_obs.n, &shared_nav, base_sats);
+	CaculateSatellitePositions(epoch.rover_obs.data, epoch.rover_obs.n, &shared_nav, rover_sats);
 
 	for (int i = 0; i < base.raw.obs.n; ++i)
 	{
@@ -282,7 +320,7 @@ bool BuildRtkEpoch(const station_state_t& base,const station_state_t& rover,cons
 		//筛选是否可用
 		if (!PassRtkObservationCheck(
 			base.raw.obs.data[i], rover.raw.obs.data[j],
-			base.sats[i], rover.sats[j],
+			base_sats[i], rover_sats[j],
 			base.spp_sol, rover.spp_sol, config,
 			base_azel, rover_azel))
 		{
@@ -294,8 +332,8 @@ bool BuildRtkEpoch(const station_state_t& base,const station_state_t& rover,cons
 		item.sat = sat;
 		item.base_index = i;
 		item.rover_index = j;
-		item.base_sat = base.sats[i];
-		item.rover_sat = rover.sats[j];
+		item.base_sat = base_sats[i];
+		item.rover_sat = rover_sats[j];
 		item.base_azel[0] = base_azel[0];
 		item.base_azel[1] = base_azel[1];
 		item.rover_azel[0] = rover_azel[0];

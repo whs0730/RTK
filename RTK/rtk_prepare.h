@@ -82,7 +82,8 @@ bool ProcessStationEpoch(
     station_state_t& station
 );
 
-// 将两个同步历元保存到rtk_epoch_t，并选取共视卫星。
+// 两站用同一套有效广播星历，分别重算发射时刻卫星状态并筛选共视星。
+// 各站原有观测、星历、SPP和卫星状态缓存不修改；没有可用共同星历的卫星不参与RTK。
 bool BuildRtkEpoch(
     const station_state_t& base,
     const station_state_t& rover,
