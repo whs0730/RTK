@@ -14,7 +14,7 @@ bool ReadNextObservationEpoch(FILE* fp, station_state_t& station)
 	while (true)
 	{
 		int ret = input_oem4f(&station.raw, fp,true);
-		//文件结束
+		// 只有文件结束才置eof；坏报文跳过后仍继续查找下一条观测。
 		if (ret == -2)
 		{
 			station.eof = true;
@@ -30,7 +30,7 @@ bool ReadNextObservationEpoch(FILE* fp, station_state_t& station)
 		{
 			continue;
 		}
-		//观测历元卫星数不足，无效历元
+		// 解码成功但没有观测时继续读；SPP所需的卫星数量在处理阶段检查。
 		if (station.raw.obs.n <= 0)
 		{
 			continue;
@@ -59,7 +59,7 @@ int CompareStationEpochTime(const station_state_t& base,
 	const gtime_t& base_time = base.raw.obs.data[0].time;
 	const gtime_t& rover_time = rover.raw.obs.data[0].time;
 	dt = timediff(base_time, rover_time);
-	//时间差小于0.001
+	// 必须与共视筛选、实时缓存配对使用同一个严格不等式。
 	if (fabs(dt) < config.sync_tolerance)
 	{
 		return 0;
@@ -71,7 +71,6 @@ int CompareStationEpochTime(const station_state_t& base,
 	return 1;//流动站较早
 }
 bool ProcessStationEpoch(station_state_t& station) {
-	// 当前测站、当前历元的观测数据
 	obs_t& obs = station.raw.obs;
 	//清空上一历元处理结果
 	memset(station.sats, 0, sizeof(station.sats));
@@ -90,7 +89,7 @@ bool ProcessStationEpoch(station_state_t& station) {
 	{
 		return false;
 	}
-	//spp解算
+	// 前一成功历元只提供迭代初值，不把其位置当成本历元有效解。
 	int position_nv = 0;
 	const sol_t* initial_solution = nullptr;
 	if (station.has_last_spp)
@@ -106,7 +105,7 @@ bool ProcessStationEpoch(station_state_t& station) {
 	//保存位置的成功解，作为下一历元的初值
 	station.last_spp_sol = station.spp_sol;
 	station.has_last_spp = true;
-	//速度解算
+	// RTK几何依赖位置，不依赖多普勒速度，因此速度失败不否定本历元位置。
 	int speed_nv = 0;
 	station.speed_ok = SPP_Speed(obs.data, obs.n, &station.spp_sol, station.sats, &station.speed_sol, &speed_nv);
 	if (!station.speed_ok || station.speed_sol.stat != 1)
@@ -117,7 +116,7 @@ bool ProcessStationEpoch(station_state_t& station) {
 	return true;//计算出位置就返回成功
 }
 
-//计算高度角和方位角
+// 视线由接收机指向卫星；WGS-84大地坐标用于转到测站局部水平系，输出为rad。
 static bool CalculateAzel(const sol_t& sol, const satpos_t& sat, double azel[2])
 {
 	double dx = sat.pos[0] - sol.XYZ[0];
@@ -156,7 +155,7 @@ bool PassRtkObservationCheck(
 	double rover_azel[2]
 )
 {
-	//不可用
+	// common保留原始观测下标，位置与卫星编号都有效后才能用于双差几何。
 	if (base_sol.stat != 1 || rover_sol.stat != 1)
 	{
 		return false;
@@ -206,7 +205,7 @@ bool PassRtkObservationCheck(
 			rover_obs.SNR[f] <= config.snr_mask)
 			return false;
 	}
-	//BDS使用指定频点
+	// 解码槽0/1中的北斗观测必须分别为B1I/B3I，不能用其他信号套用这两条波长。
 	if (sys == SYS_CMP && (base_obs.code[0] != CODE_L2I || base_obs.code[1] != CODE_L6I))
 	{
 		return false;
@@ -221,7 +220,7 @@ bool PassRtkObservationCheck(
 	return base_azel[1] >= mask_rad &&rover_azel[1] >= mask_rad;
 }
 
-// 从两站已收到的星历中选取对两站观测时刻都最近的一套；同龄时固定优先基站。
+// 用两站接收时刻距toe的较大值衡量星历年龄，选此值最小的一套；同龄时优先基站。
 // 卫星状态计算函数继续检查7200 s有效期，不把共同星历写回任一站的SPP缓存。
 static const eph_t* SelectRtkEphemeris(const nav_t& base_nav, const nav_t& rover_nav,
 	int sat, const gtime_t& base_time, const gtime_t& rover_time)
@@ -327,7 +326,7 @@ bool BuildRtkEpoch(const station_state_t& base,const station_state_t& rover,cons
 			continue;
 
 		}
-		//结构体赋值
+		// 保存共同星历重算的状态；下标仍指向未压缩的两站obs数组。
 		common_sat_t& item = epoch.common[epoch.ncommon++];
 		item.sat = sat;
 		item.base_index = i;

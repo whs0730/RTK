@@ -11,14 +11,15 @@ enum class RtkObservationType
     Code
 };
 
-// 控制任务二的系统和频点
+// 短基线非组合模型不估计电离层、对流层或系统间偏差，假定差分后残差可忽略。
+// GPS和BDS分别选参考星，频点共享三维位置，每个星对/频点各估计一个双差模糊度，单位周。
 struct rtk_model_options_t
 {
     bool use_gps = true;
     bool use_bds = true;
     int frequency_count = 2;       // 1：L1/B1I，2：L1/L2和B1I/B3I
-    bool exclude_bds_geo_reference = true;
-    // 有已知基站坐标时用于几何计算；关闭时保持原来的SPP概略坐标方式。
+    bool exclude_bds_geo_reference = true; // 仅禁止GEO作参考星，不剔除GEO非参考星
+    // 有已知基站坐标时用于几何计算；关闭时使用本历元基站SPP概略坐标。
     bool use_known_base_xyz = false;
     double known_base_xyz[3]{};    // ECEF XYZ，单位m；不覆盖epoch.base_spp
 };
@@ -36,7 +37,7 @@ struct dd_row_info_t
     int common_index = -1;         // epoch.common中的非参考星下标
     int reference_common_index = -1;
     double wavelength = 0.0;       // m/cycle
-    unsigned char lli = 0;         // 两站、两颗卫星的LLI按位或；留给后续周跳处理
+    unsigned char lli = 0;         // 两站、两颗卫星的LLI按位或；供后续半周固定检查
 };
 
 // B矩阵第3列起的模糊度列映射，列号从0开始。
@@ -79,6 +80,7 @@ struct rtk_function_model_t
 // 短基线单历元非组合模型：L = B * [dX,dY,dZ,N_DD...]^T + noise。
 // dX/dY/dZ为坐标改正(m)，N_DD为本历元的绝对双差模糊度(cycle)。
 // L为原始双差观测减双差几何距离，未扣除任何模糊度初值，单位统一为m。
+// 单差取流动站减基准站，双差再取目标星减参考星；相位方程的模糊度系数为+lambda。
 // 各站使用epoch.common中各自的卫星位置；输入epoch不被修改。
 // 基站几何坐标由options选择；流动站展开点始终使用调用者传入的rover_xyz。
 // 行序：GPS相位f0/f1、GPS伪距f0/f1，再BDS相位f0/f1、BDS伪距f0/f1。

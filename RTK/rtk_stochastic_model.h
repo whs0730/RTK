@@ -42,6 +42,8 @@ struct rtk_stochastic_model_t
 // 不重新筛星、不重新选参考星、不修改输入。相位已经按米定权，不再乘波长平方。
 // 默认等方差，伪距/相位方差比为10000；矩阵维数取任务二观测数，而非参数数。
 // 调用者应先完成任务二构模；这里只使用行映射等信息，不重复校验B、L及参数个数。
+// 每块D=diag(v_target)+v_reference*1*1'，v是两站非差方差之和；跨块置零。
+// 等方差相位块的双差对角为4*sigma²、非对角为2*sigma²；伪距块再乘方差比。
 bool BuildRtkStochasticModel(
     const rtk_epoch_t& epoch,
     const rtk_function_model_t& function_model,

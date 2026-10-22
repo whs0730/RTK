@@ -45,6 +45,9 @@
     <ClCompile Include="rtk_prepare.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="rtk_stream.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="rtk_main.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -99,6 +102,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="rtk_prepare.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="rtk_stream.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="station_satpos.h">

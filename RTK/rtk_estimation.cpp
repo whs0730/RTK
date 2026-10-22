@@ -173,6 +173,8 @@ static bool ValidModels(const rtk_function_model_t& model, const rtk_stochastic_
     return true;
 }
 
+// 接收线性化参数[dXYZ,N]，统一整理绝对坐标、基线、协方差块和拟合统计。
+// EKF调用时展开点已经更新，前三项改正由调用方置零，模糊度仍是绝对双差周数。
 static void FillSolution(const rtk_function_model_t& model, const rtk_stochastic_model_t& stochastic,
     const Matrix& x, const Matrix& covariance, rtk_solution_t& solution)
 {
@@ -231,6 +233,7 @@ static void FillSolution(const rtk_function_model_t& model, const rtk_stochastic
             ++code_count;
         }
     }
+    // 分类型RMS只描述观测拟合，不是坐标真误差；v'Pv另用完整权阵计入行间相关。
     solution.phase_rms_m = phase_count ? sqrt(phase_sum / phase_count) : 0.0;
     solution.code_rms_m = code_count ? sqrt(code_sum / code_count) : 0.0;
     solution.weighted_residual_sum = mul(mul(transpose(solution.residuals), stochastic.P), solution.residuals)[0][0];
@@ -272,6 +275,7 @@ bool SolveRtkLeastSquares(const rtk_function_model_t& model,
             }
         }
         // L中未扣除模糊度初值，因此法方程直接解出[dX,dY,dZ,N...]，N无需再次累加。
+        // x=(B'PB)^-1 B'PL，输出协方差为(B'PB)^-1，不乘后验sigma0²。
         const Matrix bt_p = mul(transpose(model.B), stochastic.P);
         const Matrix normal = mul(bt_p, model.B);
         const Matrix covariance = CovarianceInverse(normal);
@@ -366,6 +370,8 @@ static vector<rtk_phase_history_t> PhaseHistory(const rtk_epoch_t& epoch, int fr
     return history;
 }
 
+// 这里的slip表示“不能沿用旧模糊度”，也包括信号码或半周状态变化，不只物理周跳。
+// GF/MW仅在双频时可用，比较对象为上一成功滤波历元；单频依赖LLI及跟踪状态。
 static vector<vector<bool>> DetectSlips(const rtk_epoch_t& epoch,
     const vector<rtk_phase_history_t>& current, const rtk_filter_state_t& filter,
     const rtk_estimation_options_t& options)
@@ -407,6 +413,7 @@ static vector<vector<bool>> DetectSlips(const rtk_epoch_t& epoch,
 
 // 旧状态只存N(s,r_old)，其中N(r_old,r_old)=0。
 // 新双差N(s,r_new)=N(s,r_old)-N(r_new,r_old)，两项分别以+1、-1写入变换行。
+// sat等于旧参考星时该项为0，仍算可映射；旧状态找不到所需星时返回false并改走初始化。
 static bool AddOldAmbiguity(const rtk_filter_state_t& filter, const dd_ambiguity_info_t& current,
     int sat, double sign, vector<double>& transform)
 {
@@ -455,6 +462,8 @@ static double InitialAmbiguity(const rtk_function_model_t& model, const dd_ambig
     return (model.L[phase_row][0] - model.L[code_row][0]) / ambiguity.wavelength;
 }
 
+// 状态顺序随当前模型变化，T把旧状态映射到当前卫星/频点/参考星组合。
+// 不可传递的行全零：其初值、方差随后独立设置，与其他状态的先验交叉项保持零。
 static void Predict(const rtk_epoch_t& epoch, const rtk_function_model_t& model,
     const rtk_estimation_options_t& options, const rtk_filter_state_t& filter,
     const vector<vector<bool>>& slips, bool restart, double dt, Matrix& prior, Matrix& covariance,
@@ -576,6 +585,7 @@ bool EstimateRtkEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,
         {
             return Fail(solution, "EKF requires strictly increasing epoch times");
         }
+        // 间隔从上一成功更新算起；初始化模式或基站基准变化时，整组状态重新建立。
         bool restart = !filter.initialized || dt > options.reset_gap_s || filter.kinematic != options.kinematic ||
             filter.base_xyz_is_known != model.base_xyz_is_known;
         // 基站几何基准变化后旧模糊度不能直接沿用；使用逐历元基站SPP时也按此规则重置。
@@ -634,6 +644,7 @@ bool EstimateRtkEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,
             mul(mul(gain, stochastic.D), transpose(gain)));
         Symmetrize(covariance);
         CovarianceInverse(covariance);
+        // NIS只用于诊断，此处不设置卡方门限，也不据此剔除单条观测。
         solution.innovation_nis = mul(mul(transpose(innovation), s_inverse), innovation)[0][0];
         if (!isfinite(solution.innovation_nis) || solution.innovation_nis < -1e-8)
         {

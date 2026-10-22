@@ -22,7 +22,8 @@ bool ValidMatrix(const Matrix& a, int rows, int columns)
     return true;
 }
 
-// 在相关系数阵上分解；米和周的量级不作为秩判断依据。
+// Q=S*C*S，S为对角标准差阵；对无量纲C作Cholesky分解，米和周的量级不作为秩判断依据。
+// 返回C的下三角因子，scale保存S；该归一化仅用于检查和线性求解，不改变整数搜索格点。
 Matrix FactorCovariance(const Matrix& q, vector<double>& scale)
 {
     const int n = static_cast<int>(q.size());
@@ -53,6 +54,8 @@ Matrix FactorCovariance(const Matrix& q, vector<double>& scale)
     return lower;
 }
 
+// 用Q=S*lower*lower'*S解Q*x=rhs，依次缩放、前代、回代、还原尺度，避免显式求Q^-1。
+// lower/scale必须来自同一次FactorCovariance，rhs的行数必须与Q一致，可同时解多列。
 Matrix SolveCovariance(const Matrix& lower, const vector<double>& scale, const Matrix& rhs)
 {
     const int n = static_cast<int>(lower.size());
@@ -78,11 +81,13 @@ Matrix SolveCovariance(const Matrix& lower, const vector<double>& scale, const M
     return x;
 }
 
+// 搜索枚举需要固定的半整数舍入和零残差方向，与配套lambda.c保持一致。
 double Sign(double x) { return x <= 0.0 ? -1.0 : 1.0; }
 double RoundInteger(double x) { return floor(x + 0.5); }
 
 // 降相关和MLAMBDA搜索沿用课程配套LAMBDA/LAMBDA/lambda.c的算法。
 // 内部仍按列存储，a[i+j*n]是第i行第j列；不与项目Matrix的行索引混用。
+// 此处为Q=L'*diag(d)*L，L是单位下三角阵，与上面相关系数阵的Cholesky因子不同。
 void LdFactor(int n, const vector<double>& q, vector<double>& lower, vector<double>& d)
 {
     auto a = q;
@@ -98,6 +103,7 @@ void LdFactor(int n, const vector<double>& q, vector<double>& lower, vector<doub
     }
 }
 
+// 整数Gauss变换使L的非对角元素靠近0；同步累计整数可逆矩阵Z，保持整数集合一一对应。
 void IntegerGauss(int n, vector<double>& lower, vector<double>& z, int i, int j)
 {
     const double mu = RoundInteger(lower[i + j * n]);
@@ -112,6 +118,7 @@ void IntegerGauss(int n, vector<double>& lower, vector<double>& z, int i, int j)
     }
 }
 
+// 交换相邻搜索维度后同步更新L、d和Z，不能只交换方差而保留原变换矩阵。
 void Permute(int n, vector<double>& lower, vector<double>& d, int j, double delta, vector<double>& z)
 {
     const double eta = d[j] / delta;
@@ -139,6 +146,7 @@ void Reduce(int n, vector<double>& lower, vector<double>& d, vector<double>& z)
         const double v = lower[j + 1 + j * n];
         const double delta = d[j] + v * v * d[j + 1];
         if (!isfinite(delta) || delta <= 0.0) throw runtime_error("Invalid reduced variance");
+        // 只有delta比下一条件方差小超过1e-6才交换；此容差用于降相关，不是Ratio门限。
         if (delta + 1e-6 < d[j + 1])
         {
             Permute(n, lower, d, j, delta, z);
@@ -149,6 +157,8 @@ void Reduce(int n, vector<double>& lower, vector<double>& d, vector<double>& z)
     }
 }
 
+// 从最后一维向前搜索，distance[k]累计已确定高层的距离，conditional[k]为该层条件均值。
+// 每层从最近整数向两侧交替枚举；越过半径则回溯，保留完整向量的两个最优候选。
 Matrix Search(int n, const vector<double>& lower, const vector<double>& d, const vector<double>& mean,
     int limit, int& iterations)
 {
@@ -191,6 +201,7 @@ Matrix Search(int n, const vector<double>& lower, const vector<double>& d, const
                     norms[worst] = next_distance;
                     worst = norms[0] > norms[1] ? 0 : 1;
                 }
+                // 有两组候选后以较差者收紧半径，仍需继续搜索直到整棵可行子树穷尽。
                 if (count == 2) radius = norms[worst];
                 integer[0] += step[0];
                 y = conditional[0] - integer[0];
@@ -210,6 +221,7 @@ Matrix Search(int n, const vector<double>& lower, const vector<double>& d, const
             step[k] = -step[k] - Sign(step[k]);
         }
     }
+    // 达到上限不代表已找到全局前两名，不能用当前暂存结果进行Ratio检验。
     throw runtime_error("LAMBDA search iteration limit exceeded");
 }
 
@@ -248,6 +260,7 @@ bool SearchRtkIntegerAmbiguities(const Matrix& ambiguities, const Matrix& covari
         }
         LdFactor(n, q, lower, d);
         Reduce(n, lower, d, z);
+        // 降相关坐标为z_float=Z'*N_float，协方差对应Z'*QNN*Z；Z本身不缩放周数。
         Matrix z_transpose = zeros(n, n);
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j)
@@ -258,6 +271,7 @@ bool SearchRtkIntegerAmbiguities(const Matrix& ambiguities, const Matrix& covari
         for (double value : transformed)
             if (!isfinite(value) || fabs(value) > 1e12) throw runtime_error("Reduced ambiguity exceeds integer precision limit");
         const Matrix reduced_candidates = Search(n, lower, d, transformed, max_search_iterations, candidates.search_iterations);
+        // 搜索结果满足z_integer=Z'*N_integer，反变换后再核对整周性及正向变换的一致性。
         const Matrix inverse_z = inverse(z_transpose);
         if (!ValidMatrix(inverse_z, n, n)) throw runtime_error("LAMBDA inverse transform failed");
         Matrix integers = mul(inverse_z, reduced_candidates);
@@ -327,12 +341,14 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
                 throw runtime_error("Nonfinite float coordinates");
         vector<double> scale;
         FactorCovariance(input.covariance, scale);
+        // 先保留可输出的FLOAT，后续任何搜索、Ratio或条件位置更新失败都不提交部分FIX。
         CopyFloatPosition(input, result);
         if (!isfinite(options.ratio_threshold) || options.ratio_threshold <= 1.0 || options.max_search_iterations < 1)
             throw runtime_error("Invalid ambiguity resolution options");
         if (!ValidMatrix(input.ambiguity_covariance, n, n) ||
             !ValidMatrix(input.position_ambiguity_covariance, 3, n) || static_cast<int>(input.ambiguities.size()) != n)
             throw runtime_error("Ambiguity covariance blocks or mapping dimensions disagree");
+        // QNN和QXN必须取自同一个完整协方差且与模糊度列映射同序，不能用重排后的块。
         set<tuple<int, int, int>> mapping;
         result.float_ambiguities = zeros(n, 1);
         result.ambiguities = input.ambiguities;
@@ -366,6 +382,7 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
             options.max_search_iterations, result.candidates)) throw runtime_error(result.candidates.error_message);
         result.ratio = result.candidates.squared_norms[0] == 0.0 ? numeric_limits<double>::infinity() :
             result.candidates.squared_norms[1] / result.candidates.squared_norms[0];
+        // Ratio是次优/最优二次型之比，严格大于门限才固定；它不是位置精度或成功概率。
         if (!(result.ratio > options.ratio_threshold)) return true;
 
         vector<double> ambiguity_scale;
@@ -373,7 +390,9 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
         Matrix delta = zeros(n, 1);
         for (int i = 0; i < n; ++i) delta[i][0] = result.candidates.integers[i][0] - result.float_ambiguities[i][0];
         // 条件均值：X_fixed=X_float+QXN*QNN^-1*(N_integer-N_float)。
+        // delta以周为单位，QXN以m*cycle为单位，因此位置改正为m；顺序反转会改变改正符号。
         const Matrix correction = mul(input.position_ambiguity_covariance, SolveCovariance(lower, ambiguity_scale, delta));
+        // 条件协方差QXX_fixed=QXX-QXN*QNN^-1*QNX，只有对称化和正定检查通过后才接受。
         Matrix fixed_covariance = sub(result.position_covariance, mul(input.position_ambiguity_covariance,
             SolveCovariance(lower, ambiguity_scale, transpose(input.position_ambiguity_covariance))));
         for (int i = 0; i < 3; ++i)
@@ -393,6 +412,7 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
         unique_ptr<BLH> blh(XYZtoBLH(base, 6378137.0, 1.0 / 298.257223563));
         unique_ptr<ENU> enu(XYZtoENU(blh.get(), baseline));
         if (!isfinite(enu->E) || !isfinite(enu->N) || !isfinite(enu->U)) throw runtime_error("Nonfinite fixed ENU");
+        // 所有固定坐标和ENU均检查完成后才覆盖FLOAT输出，跨历元滤波状态始终不在此修改。
         for (int i = 0; i < 3; ++i)
         {
             result.rover_xyz[i] = fixed_rover[i];

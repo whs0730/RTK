@@ -18,7 +18,7 @@ struct rtk_estimation_options_t
     double initial_ambiguity_sigma_m = 30.0; // 除以波长后才是模糊度初始标准差(周)
     double position_process_sigma = 1e-4;   // 静态位置随机游走，m/sqrt(s)
     double ambiguity_process_sigma = 1e-4;  // 双差模糊度随机游走，cycle/sqrt(s)
-    double reset_gap_s = 300.0;            // 距上一成功历元超过此间隔时重置整个滤波器
+    double reset_gap_s = 300.0;            // 距上一成功历元超过此间隔时重置整个滤波器，s
     double geometry_free_threshold_m = 0.05; // 站间单差GF在两次成功历元间的跳变限，m
     double melbourne_wubbena_threshold_cycles = 5.0; // 站间单差MW跳变限，周
 };
@@ -90,11 +90,14 @@ bool SolveRtkLeastSquares(const rtk_function_model_t& function_model,
 // LS每次更新展开点后重建B/L；EKF在预报位置处线性化，并传递双差状态及完整协方差。
 // EKF要求时刻严格递增；filter由调用方跨历元持有，LS分支不读写其中的历史状态。
 // 输入历元、两站SPP均不修改；失败时solution清空，filter保留上一成功历元。
+// 动态EKF不含速度状态：每历元用SPP重置位置先验，仅连续传递可映射的模糊度。
+// 两种估计方式均输出浮点解；模糊度固定在独立模块完成，不反馈到此处的filter。
 bool EstimateRtkEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,
     const rtk_model_options_t& model_options, const rtk_stochastic_options_t& stochastic_options,
     const rtk_estimation_options_t& options, rtk_filter_state_t& filter, rtk_solution_t& solution);
 
 // 详细输出保留QNN和QXN块供模糊度固定使用；这些接口本身不进行固定或Ratio检验。
+// CSV中的dX/dY/dZ是流动站减基站的基线分量，不是solution.x中的线性化改正。
 bool WriteRtkSolution(ostream& out, const rtk_solution_t& solution);
 bool WriteRtkSolutionCsvHeader(ostream& out);
 bool WriteRtkSolutionCsv(ostream& out, const rtk_solution_t& solution);

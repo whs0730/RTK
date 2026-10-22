@@ -3,15 +3,16 @@
 #include "decode.h"
 #include "obs.h"
 #include "station_satpos.h"
-// RTK任务一配置参数
+// 两站同步与共视筛选共用的门限；时间使用GPST，角度配置与保存值的单位不同。
 struct rtk_config_t
 {
-    double sync_tolerance = 0.001;  // 时间同步阈值，实际判断使用 < 0.001 s
+    double sync_tolerance = 0.001;  // 两站接收时刻差的绝对值必须严格小于此值，s
     double elevation_mask = 10.0;   // 截止高度角，单位：度
-    double snr_mask = 30.0;         // 信噪比必须 > 30 dB-Hz
+    double snr_mask = 30.0;         // 信噪比门限，dB-Hz；观测值必须严格大于此值
 };
 
-// 单个测站的运行状态
+// 每站独立持有解码历史，不能让两站共用raw_t中的锁定时间、LLI或导航缓存。
+// 当前历元失败时只清空当前结果，last_spp_sol仍可作为以后历元的SPP初值。
 struct station_state_t
 {
     raw_t raw;                      // 解码状态，内部包含obs和nav
@@ -29,7 +30,7 @@ struct station_state_t
     bool eof = false;
 };
 
-// 一颗共视卫星的数据
+// 共视下标指向本历元两站各自的观测数组，不是内部sat编号，也不是压缩后的卫星状态下标。
 struct common_sat_t
 {
     int sat = 0;                    // 内部卫星编号
@@ -40,15 +41,16 @@ struct common_sat_t
     satpos_t base_sat;              // 基准站对应的卫星状态
     satpos_t rover_sat;             // 流动站对应的卫星状态
 
-    double base_azel[2] = { 0.0 };    // 基准站方位角、高度角
-    double rover_azel[2] = { 0.0 };   // 流动站方位角、高度角
+    double base_azel[2] = { 0.0 };    // 基准站方位角、高度角，rad；以该站SPP坐标计算
+    double rover_azel[2] = { 0.0 };   // 流动站方位角、高度角，rad；以该站SPP坐标计算
 };
 
-// 一个已经同步的RTK历元
+// 保存两站观测和SPP的值副本；common只列出筛选通过的卫星，obs数组本身不压缩。
+// 卫星状态采用共同星历计算，SPP仍是各站独立导航缓存得到的结果。
 struct rtk_epoch_t
 {
-    gtime_t time;                   // 同步历元时间
-    double time_diff = 0.0;         // 两站历元时间差
+    gtime_t time;                   // 基准站接收时刻，GPST周与周内秒
+    double time_diff = 0.0;         // 基准站减流动站的接收时刻差，s
 
     obs_t base_obs;                 // 基准站当前历元观测值
     obs_t rover_obs;                // 流动站当前历元观测值
@@ -70,6 +72,7 @@ bool ReadNextObservationEpoch(
 
 // 比较两个测站当前观测历元。
 // 返回-1：基准站较早；0：同步；1：流动站较早。
+// 调用前应保证两站都有观测；空观测也返回0，不能据此判定同步。
 int CompareStationEpochTime(
     const station_state_t& base,
     const station_state_t& rover,
@@ -77,13 +80,15 @@ int CompareStationEpochTime(
     double& dt
 );
 
-// 计算一个测站的卫星状态并进行SPP。
+// 按该站观测计算卫星状态、SPP及多普勒速度；位置成功即返回true，速度允许失败。
+// SPP成功后更新该站的last_spp_sol，不使用另一站或已知基站坐标替代SPP。
 bool ProcessStationEpoch(
     station_state_t& station
 );
 
 // 两站用同一套有效广播星历，分别重算发射时刻卫星状态并筛选共视星。
 // 各站原有观测、星历、SPP和卫星状态缓存不修改；没有可用共同星历的卫星不参与RTK。
+// 返回true只说明至少有一颗合格共视星；三维双差几何是否可解由函数模型另行检查。
 bool BuildRtkEpoch(
     const station_state_t& base,
     const station_state_t& rover,
@@ -91,7 +96,9 @@ bool BuildRtkEpoch(
     rtk_epoch_t& epoch
 );
 
-// 检查一颗卫星是否满足RTK数据准备要求。
+// 两站都必须具备前两个频点的有效伪距、相位和同码观测，SNR严格大于门限。
+// 准备层固定按双频筛选；后续选择单频模型不会恢复在此处被剔除的卫星。
+// LLI在此处不作整周固定判据，交给估计与模糊度模块处理；高度角等于门限时可通过。
 bool PassRtkObservationCheck(
     const obsd_t& base_obs,
     const obsd_t& rover_obs,
@@ -103,9 +110,9 @@ bool PassRtkObservationCheck(
     double base_azel[2],
     double rover_azel[2]
 );
-//筛选共视卫星
+// 导出共视历元、SPP及共视星的观测和卫星状态；角度在文本中转为度。
 bool WritePreparedEpoch(ostream& out,const rtk_epoch_t& epoch);
-//基准站和流动站的完整解码观测数据
+// 导出传入历元已解码的全部观测槽，不筛共视星；不包含原始二进制报文或星历。
 bool WriteStationObservations(ostream& out, const obs_t& obs);
-//读写函数
+// 返回是否读到下一历元；写入失败仅置output_failed，调用方需另行检查该标志。
 bool ReadAndExportNext(FILE* fp,station_state_t& station,ostream& out,bool& output_failed);

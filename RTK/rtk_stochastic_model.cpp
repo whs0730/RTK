@@ -4,7 +4,7 @@
 #include <iomanip>
 using namespace std;
 
-// 同一系统、同一频点、同一种观测属于一个块，不使用tuple或类型别名。
+// 同一系统、同一频点、同一种观测共用参考星单差，因此构成一个相关块。
 static bool SameObservationBlock(const dd_row_info_t &first, const dd_row_info_t &second)
 {
     return first.sys == second.sys && first.frequency == second.frequency && first.type == second.type;
@@ -165,7 +165,7 @@ static bool ValidOutput(const rtk_stochastic_model_t &model)
     return true;
 }
 
-// 按行输出一个矩阵，D和P分别调用此函数，避免使用pair及初始化列表遍历。
+// D与P采用相同的行序和文本格式，矩阵头包含维数供结果文件解析。
 static void WriteStochasticMatrix(ostream &out, const Matrix &matrix, const char *name)
 {
     int n = static_cast<int>(matrix.size());
@@ -189,7 +189,7 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
 bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_t &function_model,
                              const rtk_stochastic_options_t &options, rtk_stochastic_model_t &model)
 {
-    // 1. 只检查任务三使用的定权配置、行映射和历元。
+    // 只检查定权使用的配置、行映射和历元。
     // B、L的维数与数值、参数个数等由任务二负责，这里不再重复检查。
     model = rtk_stochastic_model_t{};
     if (!ValidOptions(options))
@@ -224,7 +224,7 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
         return Fail(model, "任务二模型与输入共视数据不属于同一历元");
     }
 
-    // 2. 读取任务二行映射，计算每行的目标星和参考星单差方差，并按观测类型分块。
+    // 沿用函数模型的行映射，方差数组与B/L同序，不另行筛星或选择参考星。
     model.target_sd_variance.resize(n);
     model.reference_sd_variance.resize(n);
     for (int i = 0; i < n; ++i)
@@ -289,7 +289,7 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
         }
     }
 
-    // 3. 将每个块的协方差填入D的原行号，跨块元素保持零。
+    // 将每个块的协方差填入D的原行号，跨块元素保持零。
     model.D = zeros(n, n);
     // processed记录哪些行已完成；用普通循环收集同一块的原行号。
     vector<int> processed(n, 0);
@@ -312,6 +312,7 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
         const double reference_variance = model.reference_sd_variance[indices[0]];
         // 一个块：D = diag(v_目标星) + v_参考星 * 1*1ᵀ。
         // 对角元素为目标星与参考星单差方差之和，非对角元素为参考星单差方差。
+        // 两条双差均以相同符号减去参考星，故共享误差项产生正协方差。
         for (int a = 0; a < block_size; ++a)
         {
             int i = indices[a];
@@ -323,7 +324,7 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
         }
     }
 
-    // 4. 完整的D构建好后，直接调用matrix.cpp中的矩阵求逆函数，得到权阵P。
+    // 对完整D求逆得到P，保留共享参考星引入的非对角项，不能只倒置对角元素。
     // inverse()在矩阵奇异等情况下会抛出异常，这里转换为构模失败信息。
     try
     {
