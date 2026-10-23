@@ -51,7 +51,7 @@ bool SearchRtkIntegerAmbiguities(const Matrix& float_ambiguities, const Matrix& 
 bool ResolveRtkAmbiguities(const rtk_solution_t& float_solution,
     const rtk_ambiguity_options_t& options, rtk_ambiguity_solution_t& result);
 
-// 详细文本含候选与列映射；CSV的dX/dY/dZ为基线，标准差为所选FIX或FLOAT位置的标准差。
+// TXT按课程参考格式显示Ratio、模糊度、基线方差和总结；CSV保留高精度基线及其标准差。
 // 未进行或未完成搜索时，CSV的Ratio及候选二次型留空，不能把空值当作Ratio=0。
 bool WriteRtkAmbiguitySolution(ostream& out, const rtk_ambiguity_solution_t& solution);
 bool WriteRtkAmbiguitySolutionCsvHeader(ostream& out);

@@ -110,9 +110,9 @@ bool PassRtkObservationCheck(
     double base_azel[2],
     double rover_azel[2]
 );
-// 导出共视历元、SPP及共视星的观测和卫星状态；角度在文本中转为度。
+// 按课程参考格式导出共视星列表和两站SPP摘要；BLH角度用度。
 bool WritePreparedEpoch(ostream& out,const rtk_epoch_t& epoch);
-// 导出传入历元已解码的全部观测槽，不筛共视星；不包含原始二进制报文或星历。
+// 按卫星、频点列出已解码的观测值，不筛共视星。
 bool WriteStationObservations(ostream& out, const obs_t& obs);
 // 返回是否读到下一历元；写入失败仅置output_failed，调用方需另行检查该标志。
 bool ReadAndExportNext(FILE* fp,station_state_t& station,ostream& out,bool& output_failed);

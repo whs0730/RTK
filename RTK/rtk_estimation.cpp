@@ -692,70 +692,31 @@ static const char* MethodName(RtkEstimationMethod method)
     return method == RtkEstimationMethod::LeastSquares ? "LS" : "EKF";
 }
 
-// 只接收成功结果中的非空矩阵；矩阵块头保留行列数，便于按历元读取完整协方差。
-static void WriteMatrix(ostream& out, const char* name, const Matrix& matrix)
-{
-    out << name << ' ' << matrix.size() << ' ' << matrix[0].size() << '\n';
-    for (const auto& row : matrix)
-    {
-        for (int c = 0; c < static_cast<int>(row.size()); ++c)
-        {
-            out << (c == 0 ? "" : " ") << row[c];
-        }
-        out << '\n';
-    }
-}
-
 bool WriteRtkSolution(ostream& out, const rtk_solution_t& solution)
 {
     if (!out.good() || !solution.valid || !ValidMatrix(solution.x, solution.parameter_count, 1) ||
-        !ValidMatrix(solution.covariance, solution.parameter_count, solution.parameter_count))
-    {
-        return false;
-    }
+        !ValidMatrix(solution.covariance, solution.parameter_count, solution.parameter_count)) return false;
     const auto flags = out.flags();
     const auto precision = out.precision();
-    out << defaultfloat << setprecision(15);
-    out << "RTK_FLOAT week=" << solution.time.week << " sow=" << solution.time.sec
-        << " method=" << MethodName(solution.method) << " nv=" << solution.observation_count
-        << " nx=" << solution.parameter_count << " iterations=" << solution.iterations
-        << " initialized_N=" << solution.initialized_ambiguities << " carried_N=" << solution.carried_ambiguities
-        << " filter_reset=" << solution.filter_reinitialized << '\n';
-    out << "COVARIANCE prior_noise_scale units=XYZ_m,N_cycle residual=B*x-L\n";
-    out << "ROVER_XYZ_m " << solution.rover_xyz[0] << ' ' << solution.rover_xyz[1] << ' ' << solution.rover_xyz[2] << '\n';
-    out << "BASELINE_XYZ_m " << solution.baseline_xyz[0] << ' ' << solution.baseline_xyz[1] << ' ' << solution.baseline_xyz[2] << '\n';
-    out << "BASELINE_ENU_m " << solution.baseline_enu[0] << ' ' << solution.baseline_enu[1] << ' ' << solution.baseline_enu[2] << '\n';
-    out << "FIT phase_rms_m=" << solution.phase_rms_m << " code_rms_m=" << solution.code_rms_m
-        << " vPv=" << solution.weighted_residual_sum;
-    if (solution.method == RtkEstimationMethod::LeastSquares)
-    {
-        out << " dof=" << solution.degrees_of_freedom;
-        if (solution.degrees_of_freedom > 0) { out << " sigma0=" << solution.sigma0; }
-    }
-    else
-    {
-        out << " innovation_nis=" << solution.innovation_nis;
-    }
+    out << fixed << setprecision(3) << ">RTK: " << solution.time.week << ' ' << solution.time.sec << "\n\n";
+    out << "浮点解信息：\n流动站坐标（XYZ）：";
+    for (double value : solution.rover_xyz) out << setw(15) << value;
+    out << "\n\n基线+模糊度参数：浮点\ndxyz:";
+    for (double value : solution.baseline_xyz) out << setw(11) << value;
     out << '\n';
-    for (const auto& ambiguity : solution.ambiguities)
-    {
-        out << "AMB column=" << ambiguity.column << " sat=" << sat2id(ambiguity.sat)
-            << " ref=" << sat2id(ambiguity.reference_sat) << " frequency=" << ambiguity.frequency
-            << " N_cycle=" << solution.x[ambiguity.column][0]
-            << " std_cycle=" << sqrt(solution.covariance[ambiguity.column][ambiguity.column]) << '\n';
-    }
-    WriteMatrix(out, "STATE", solution.x);
-    WriteMatrix(out, "COV", solution.covariance);
-    WriteMatrix(out, "QNN_cycle2", solution.ambiguity_covariance);
-    WriteMatrix(out, "QXN_m_cycle", solution.position_ambiguity_covariance);
-    for (int i = 0; i < solution.observation_count; ++i)
-    {
-        const auto& row = solution.rows[i];
-        out << "RESIDUAL row=" << i << " sat=" << sat2id(row.sat) << " ref=" << sat2id(row.reference_sat)
-            << " frequency=" << row.frequency << " type=" << (row.type == RtkObservationType::Phase ? "PHASE" : "CODE")
-            << " v_m=" << solution.residuals[i][0] << '\n';
-    }
-    out << "END_RTK_FLOAT\n";
+    for (const auto& item : solution.ambiguities)
+        out << sat2id(item.sat) << " f" << item.frequency + 1 << " DDAmb:"
+            << setw(11) << solution.x[item.column][0] << '\n';
+    out << '\n';
+    writeMatrix(out, solution.covariance, "浮点解方差：");
+    out << "浮点解总结：\n"
+        << "Week  Sow(sec)      dX(m)      dY(m)      dZ(m)      dN(m)      dE(m)      dU(m)"
+        << "  dX_std(m) dY_std(m) dZ_std(m) obsL_RMS(m) obsP_RMS(m)\n";
+    out << setw(4) << solution.time.week << setw(12) << solution.time.sec << setprecision(4);
+    for (double value : solution.baseline_xyz) out << setw(11) << value;
+    out << setw(11) << solution.baseline_enu[1] << setw(11) << solution.baseline_enu[0] << setw(11) << solution.baseline_enu[2];
+    for (int i = 0; i < 3; ++i) out << setw(11) << sqrt(solution.covariance[i][i]);
+    out << setw(12) << solution.phase_rms_m << setw(12) << solution.code_rms_m << "\n\n";
     out.flags(flags);
     out.precision(precision);
     return out.good();

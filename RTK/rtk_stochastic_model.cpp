@@ -165,21 +165,6 @@ static bool ValidOutput(const rtk_stochastic_model_t &model)
     return true;
 }
 
-// D与P采用相同的行序和文本格式，矩阵头包含维数供结果文件解析。
-static void WriteStochasticMatrix(ostream &out, const Matrix &matrix, const char *name)
-{
-    int n = static_cast<int>(matrix.size());
-    out << name << ' ' << n << ' ' << n << '\n';
-    for (int i = 0; i < n; ++i)
-    {
-        for (int j = 0; j < n; ++j)
-        {
-            out << (j == 0 ? "" : " ") << matrix[i][j];
-        }
-        out << '\n';
-    }
-}
-
 bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_t &function_model,
                              rtk_stochastic_model_t &model)
 {
@@ -361,35 +346,14 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
     return true;
 }
 
-bool WriteRtkStochasticModel(ostream &out, const rtk_stochastic_model_t &model)
+bool WriteRtkStochasticModel(ostream& out, const rtk_stochastic_model_t& model)
 {
-    if (!out || !ValidOutput(model))
-    {
-        return false;
-    }
-    const ios::fmtflags flags = out.flags();
-    const streamsize precision = out.precision();
-    out << scientific << setprecision(15);
-    out << "STOCHASTIC_MODEL week=" << model.time.week << " sow=" << model.time.sec << " nv=" << model.observation_count
-        << " frequencies=" << model.frequency_count << '\n';
-    out << "WEIGHTING method=" << (model.options.method == RtkWeightingMethod::EqualVariance ? "EQUAL" : "ELEVATION")
-        << " phase_sigma_m=" << model.options.phase_sigma_m
-        << " code_phase_variance_ratio=" << model.options.code_phase_variance_ratio
-        << " elevation_a_m=" << model.options.elevation_a_m << " elevation_b_m=" << model.options.elevation_b_m << '\n';
-    out << "UNITS D=m^2 P=m^-2 ASSUMPTION independent_undifferenced_errors\n";
-    out << "REFERENCE GPS=" << (model.gps_reference_sat ? sat2id(model.gps_reference_sat) : "NONE")
-        << " BDS=" << (model.bds_reference_sat ? sat2id(model.bds_reference_sat) : "NONE") << '\n';
-    for (int i = 0; i < model.observation_count; ++i)
-    {
-        const dd_row_info_t &row = model.rows[i];
-        out << "ROW " << i << ' ' << (row.sys == SYS_GPS ? "GPS" : "BDS") << " f=" << row.frequency << ' '
-            << (row.type == RtkObservationType::Phase ? "PHASE" : "CODE") << " sat=" << sat2id(row.sat)
-            << " ref=" << sat2id(row.reference_sat) << " target_sd_variance_m2=" << model.target_sd_variance[i]
-            << " reference_sd_variance_m2=" << model.reference_sd_variance[i] << '\n';
-    }
-    WriteStochasticMatrix(out, model.D, "D");
-    WriteStochasticMatrix(out, model.P, "P");
-    out << "END_STOCHASTIC_MODEL\n";
+    if (!out.good() || !ValidOutput(model)) return false;
+    const auto flags = out.flags();
+    const auto precision = out.precision();
+    out << fixed << setprecision(3) << ">RTK: " << model.time.week << ' ' << model.time.sec << "\n\n";
+    writeMatrix(out, model.D, "双差协方差阵：");
+    writeMatrix(out, model.P, "权阵：");
     out.flags(flags);
     out.precision(precision);
     return out.good();

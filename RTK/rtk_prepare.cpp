@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <iomanip>
+#include <memory>
 using namespace std;
 bool ReadNextObservationEpoch(FILE* fp, station_state_t& station)
 {
@@ -379,146 +380,55 @@ bool WritePreparedEpoch(ostream& out,const rtk_epoch_t& epoch)
 			return false;
 		}
 	}
-	out << setprecision(15);
-
-	out << "EPOCH "
-		<< epoch.time.week << ' '
-		<< epoch.time.sec
-		<< " dt_s=" << epoch.time_diff
-		<< " base_n=" << epoch.base_obs.n
-		<< " rover_n=" << epoch.rover_obs.n
-		<< " common_gps=" << epoch.common_gps
-		<< " common_bds=" << epoch.common_bds
-		<< " common_total=" << epoch.ncommon
-		<< '\n';
-
-	out << "BASE_SPP "
-		<< "XYZ_m="
-		<< epoch.base_spp.XYZ[0] << ','
-		<< epoch.base_spp.XYZ[1] << ','
-		<< epoch.base_spp.XYZ[2]
-		<< " clock_GPS_m=" << epoch.base_spp.dtr[0]
-		<< " clock_BDS_m=" << epoch.base_spp.dtr[1]
-		<< " ns=" << epoch.base_spp.ns
-		<< " PDOP=" << epoch.base_spp.pdop
-		<< '\n';
-
-	out << "ROVER_SPP "
-		<< "XYZ_m="
-		<< epoch.rover_spp.XYZ[0] << ','
-		<< epoch.rover_spp.XYZ[1] << ','
-		<< epoch.rover_spp.XYZ[2]
-		<< " clock_GPS_m=" << epoch.rover_spp.dtr[0]
-		<< " clock_BDS_m=" << epoch.rover_spp.dtr[1]
-		<< " ns=" << epoch.rover_spp.ns
-		<< " PDOP=" << epoch.rover_spp.pdop
-		<< '\n';
-
-	for (int k = 0; k < epoch.ncommon; ++k)
-	{
-		const common_sat_t& item = epoch.common[k];
-
-		const obsd_t& base_obs =epoch.base_obs.data[item.base_index];
-
-		const obsd_t& rover_obs =epoch.rover_obs.data[item.rover_index];
-
-		out << "SAT " << sat2id(item.sat)
-			<< " base_az_deg=" << item.base_azel[0] * 180.0 / PI
-			<< " base_el_deg=" << item.base_azel[1] * 180.0 / PI
-			<< " rover_az_deg=" << item.rover_azel[0] * 180.0 / PI
-			<< " rover_el_deg=" << item.rover_azel[1] * 180.0 / PI
-			<< '\n';
-
-		// [0]/[1]：GPS L1/L2，BDS B1I/B3I
-		for (int f = 0; f < 2; ++f)
-		{
-			out << "BASE_OBS f=" << f
-				<< " P_m=" << base_obs.P[f]
-				<< " L_cycles=" << base_obs.L[f]
-				<< " D_Hz=" << base_obs.D[f]
-				<< " SNR_dBHz=" << base_obs.SNR[f]
-				<< " code=" << static_cast<int>(base_obs.code[f])
-				<< " LLI=" << static_cast<int>(base_obs.LLI[f])
-				<< '\n';
-
-			out << "ROVER_OBS f=" << f
-				<< " P_m=" << rover_obs.P[f]
-				<< " L_cycles=" << rover_obs.L[f]
-				<< " D_Hz=" << rover_obs.D[f]
-				<< " SNR_dBHz=" << rover_obs.SNR[f]
-				<< " code=" << static_cast<int>(rover_obs.code[f])
-				<< " LLI=" << static_cast<int>(rover_obs.LLI[f])
-				<< '\n';
-		}
-
-		out << "BASE_SAT "
-			<< "XYZ_m="
-			<< item.base_sat.pos[0] << ','
-			<< item.base_sat.pos[1] << ','
-			<< item.base_sat.pos[2]
-			<< " clock_s=" << item.base_sat.clk
-			<< " tx_sow=" << item.base_sat.time.sec
-			<< '\n';
-
-		out << "ROVER_SAT "
-			<< "XYZ_m="
-			<< item.rover_sat.pos[0] << ','
-			<< item.rover_sat.pos[1] << ','
-			<< item.rover_sat.pos[2]
-			<< " clock_s=" << item.rover_sat.clk
-			<< " tx_sow=" << item.rover_sat.time.sec
-			<< '\n';
-	}
-
-	out << "END_EPOCH\n";
-	return out.good();
+    const auto flags = out.flags();
+    const auto precision = out.precision();
+    out << fixed << setprecision(3) << ">RTK: " << epoch.time.week << ' ' << epoch.time.sec << "\n\n";
+    out << "共视星：GPS=" << epoch.common_gps << " BDS=" << epoch.common_bds << " CommonSats=";
+    for (int k = 0; k < epoch.ncommon; ++k) out << sat2id(epoch.common[k].sat) << ' ';
+    out << "\n\n";
+    const sol_t* solutions[] = {&epoch.base_spp, &epoch.rover_spp};
+    const char* names[] = {"基准站SPP：\n", "流动站SPP：\n"};
+    for (int station = 0; station < 2; ++station)
+    {
+        const auto& sol = *solutions[station];
+        XYZ xyz{sol.XYZ[0], sol.XYZ[1], sol.XYZ[2]};
+        unique_ptr<BLH> blh(XYZtoBLH(xyz, 6378137.0, 1.0 / 298.257223563));
+        out << names[station] << "SPP: " << epoch.time.week << ' ' << setprecision(3) << epoch.time.sec
+            << " X:" << setw(14) << sol.XYZ[0] << " Y:" << setw(14) << sol.XYZ[1] << " Z:" << setw(14) << sol.XYZ[2]
+            << " B:" << setprecision(8) << setw(14) << blh->B * 180.0 / PI
+            << " L:" << setw(14) << blh->L * 180.0 / PI
+            << " H:" << setprecision(3) << setw(10) << blh->H
+            << " PDOP:" << setw(8) << sol.pdop << " Sigma:" << setw(8) << sol.sigma0 << "\n\n";
+    }
+    out.flags(flags);
+    out.precision(precision);
+    return out.good();
 }
 
 bool WriteStationObservations(ostream& out, const obs_t& obs)
 {
-	//判断有效性
-	if (!out || obs.n <= 0 || obs.n > MAXOBS)
-		return false;
-
-	out << setprecision(15);
-
-	const gtime_t& time = obs.data[0].time;
-	out << "EPOCH week=" << time.week
-		<< " sow=" << time.sec
-		<< " satellites=" << obs.n << '\n';
-
-	for (int i = 0; i < obs.n; ++i)
-	{
-		const obsd_t& item = obs.data[i];
-
-		// 导出当前解码器保存的全部频点
-		for (int f = 0; f < NFREQ + NEXOBS; ++f)
-		{
-			// 没有观测值，不写入
-			if (item.code[f] == CODE_NONE &&
-				item.P[f] == 0.0 &&
-				item.L[f] == 0.0 &&
-				item.D[f] == 0.0f &&
-				item.SNR[f] == 0.0 &&
-				item.LLI[f] == 0)
-			{
-				continue;
-			}
-
-			out << sat2id(item.sat)
-				<< " slot=" << f
-				<< " code=" << static_cast<int>(item.code[f])
-				<< " P_m=" << item.P[f]
-				<< " L_cycles=" << item.L[f]
-				<< " D_Hz=" << item.D[f]
-				<< " SNR_dBHz=" << item.SNR[f]
-				<< " LLI=" << static_cast<int>(item.LLI[f])
-				<< '\n';
-		}
-	}
-
-	out << "END_EPOCH\n";
-	return out.good();
+    if (!out || obs.n <= 0 || obs.n > MAXOBS) return false;
+    const auto flags = out.flags();
+    const auto precision = out.precision();
+    const auto& time = obs.data[0].time;
+    out << fixed << setprecision(3) << ">OBS: " << time.week << ' ' << time.sec << "\n\n";
+    out << "Sat  Freq          P(m)            L(cycle)       D(Hz)   SNR(dB-Hz)\n";
+    for (int i = 0; i < obs.n; ++i)
+    {
+        const auto& item = obs.data[i];
+        for (int f = 0; f < NFREQ + NEXOBS; ++f)
+        {
+            if (item.code[f] == CODE_NONE && item.P[f] == 0.0 && item.L[f] == 0.0 &&
+                item.D[f] == 0.0f && item.SNR[f] == 0.0 && item.LLI[f] == 0) continue;
+            out << sat2id(item.sat) << "    f" << f + 1 << setprecision(3) << setw(17) << item.P[f]
+                << setprecision(6) << setw(20) << item.L[f] << setprecision(3) << setw(12) << item.D[f]
+                << setprecision(1) << setw(13) << item.SNR[f] << '\n';
+        }
+    }
+    out << '\n';
+    out.flags(flags);
+    out.precision(precision);
+    return out.good();
 }
 
 bool ReadAndExportNext(FILE* fp,station_state_t& station,ostream& out,bool& output_failed)

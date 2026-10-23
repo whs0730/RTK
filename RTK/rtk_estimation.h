@@ -96,7 +96,7 @@ bool EstimateRtkEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,
     const rtk_model_options_t& model_options, const rtk_stochastic_options_t& stochastic_options,
     const rtk_estimation_options_t& options, rtk_filter_state_t& filter, rtk_solution_t& solution);
 
-// 详细输出保留QNN和QXN块供模糊度固定使用；这些接口本身不进行固定或Ratio检验。
+// TXT按课程参考格式显示浮点参数、完整协方差和基线总结；固定模块直接使用内存中的QNN/QXN。
 // CSV中的dX/dY/dZ是流动站减基站的基线分量，不是solution.x中的线性化改正。
 bool WriteRtkSolution(ostream& out, const rtk_solution_t& solution);
 bool WriteRtkSolutionCsvHeader(ostream& out);

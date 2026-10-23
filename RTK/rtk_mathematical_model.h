@@ -102,5 +102,5 @@ bool BuildRtkFunctionModel(
     rtk_function_model_t& model
 );
 
-// 输出参考星、行/列映射、矩阵维数、B和L；不输出任务三的权阵。
+// 按课程参考格式输出参考星、共视星、坐标、设计矩阵和双差残差。
 bool WriteRtkFunctionModel(ostream& out,const rtk_function_model_t& model);

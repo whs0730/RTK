@@ -57,5 +57,5 @@ bool BuildRtkStochasticModel(
     rtk_stochastic_model_t& model
 );
 
-// 导出历元、定权参数、参考星、行映射、单差方差、D及P；返回写入是否成功。
+// 按课程参考格式导出历元、双差协方差阵和权阵；返回写入是否成功。
 bool WriteRtkStochasticModel(ostream& out, const rtk_stochastic_model_t& model);

@@ -466,36 +466,28 @@ bool WriteRtkAmbiguitySolution(ostream& out, const rtk_ambiguity_solution_t& sol
     if (!out.good() || !solution.valid) return false;
     const auto flags = out.flags();
     const auto precision = out.precision();
-    out << defaultfloat << setprecision(15);
-    out << "RTK_AR week=" << solution.time.week << " sow=" << solution.time.sec
-        << " status=" << (solution.fixed ? "FIX" : "FLOAT") << " ratio=" << solution.ratio
-        << " threshold=" << solution.ratio_threshold << " search_ok=" << solution.candidates.valid
-        << " search_iterations=" << solution.candidates.search_iterations
-        << " ambiguities_total=" << solution.total_ambiguities
-        << " ambiguities_used=" << solution.ambiguities.size()
-        << " ambiguities_excluded=" << solution.excluded_ambiguities << '\n';
-    if (!solution.error_message.empty()) out << "AR_MESSAGE " << solution.error_message << '\n';
-    out << "ROVER_XYZ_m " << solution.rover_xyz[0] << ' ' << solution.rover_xyz[1] << ' ' << solution.rover_xyz[2] << '\n';
-    out << "BASELINE_XYZ_m " << solution.baseline_xyz[0] << ' ' << solution.baseline_xyz[1] << ' ' << solution.baseline_xyz[2] << '\n';
-    out << "BASELINE_ENU_m " << solution.baseline_enu[0] << ' ' << solution.baseline_enu[1] << ' ' << solution.baseline_enu[2] << '\n';
-    out << "POSITION_COV_m2 3 3\n";
-    for (const auto& row : solution.position_covariance)
-    {
-        for (double value : row) out << value << ' ';
-        out << '\n';
-    }
+    out << fixed << setprecision(3) << ">RTK: " << solution.time.week << ' ' << solution.time.sec << "\n\n";
+    out << "status=" << (solution.fixed ? "Fix" : "Flo") << " ratio=" << setw(8) << solution.ratio << "\n\n";
     if (solution.candidates.valid)
     {
-        out << "SQUARED_NORMS " << solution.candidates.squared_norms[0] << ' ' << solution.candidates.squared_norms[1] << '\n';
+        out << "模糊度参数：浮点，" << (solution.fixed ? "固定" : "候选") << '\n';
         for (int i = 0; i < static_cast<int>(solution.ambiguities.size()); ++i)
         {
             const auto& item = solution.ambiguities[i];
-            out << "AMB column=" << item.column << " sat=" << sat2id(item.sat) << " ref=" << sat2id(item.reference_sat)
-                << " frequency=" << item.frequency << " float_cycle=" << solution.float_ambiguities[i][0]
-                << " best_cycle=" << solution.candidates.integers[i][0] << " second_cycle=" << solution.candidates.integers[i][1] << '\n';
+            out << sat2id(item.sat) << " f" << item.frequency + 1 << " DDAmb:"
+                << setw(11) << solution.float_ambiguities[i][0] << setw(11) << solution.candidates.integers[i][0] << '\n';
         }
+        out << '\n';
     }
-    out << "END_RTK_AR\n";
+    writeMatrix(out, solution.position_covariance, solution.fixed ? "固定基线方差：" : "浮点基线方差：");
+    out << (solution.fixed ? "固定解总结：\n" : "浮点解总结：\n")
+        << "Week  Sow(sec)      dX(m)      dY(m)      dZ(m)      dN(m)      dE(m)      dU(m)"
+        << "  dX_std(m) dY_std(m) dZ_std(m)\n";
+    out << setw(4) << solution.time.week << setw(12) << solution.time.sec << setprecision(4);
+    for (double value : solution.baseline_xyz) out << setw(11) << value;
+    out << setw(11) << solution.baseline_enu[1] << setw(11) << solution.baseline_enu[0] << setw(11) << solution.baseline_enu[2];
+    for (int i = 0; i < 3; ++i) out << setw(11) << sqrt(solution.position_covariance[i][i]);
+    out << "\n\n";
     out.flags(flags);
     out.precision(precision);
     return out.good();

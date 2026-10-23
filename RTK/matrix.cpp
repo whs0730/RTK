@@ -30,6 +30,21 @@ void printMatrix(const Matrix& A, const string& name)
     cout << endl;
 }
 
+void writeMatrix(ostream& out, const Matrix& A, const string& name)
+{
+    const auto flags = out.flags();
+    const auto precision = out.precision();
+    out << fixed << setprecision(6) << name << '\n';
+    for (const auto& row : A)
+    {
+        for (double value : row) out << ' ' << setw(13) << value;
+        out << '\n';
+    }
+    out << '\n';
+    out.flags(flags);
+    out.precision(precision);
+}
+
 // 矩阵加法。
 Matrix add(const Matrix& A, const Matrix& B)
 {

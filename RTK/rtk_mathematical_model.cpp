@@ -493,22 +493,6 @@ static bool ValidModel(const rtk_function_model_t& model)
     return true;
 }
 
-// 以下两个小函数仅用于输出可读标签，不参与数值计算。
-static const char* SystemName(int sys)
-{
-    return sys == SYS_GPS ? "GPS" : "BDS";
-}
-
-static const char* FrequencyName(int sys, int frequency)
-{
-    if (sys == SYS_GPS)
-    {
-        return frequency == 0 ? "L1" : "L2";
-
-    }
-    return frequency == 0 ? "B1I" : "B3I";
-}
-
 // 保留原四参数接口,默认双系统双频模式。
 bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],const rtk_config_t& config, rtk_function_model_t& model)
 {
@@ -589,63 +573,39 @@ bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],
     return true;
 }
 
-// 导出一整个历元的模型，out可以是文件流，也可以是控制台流。
-// 先输出参考星和行列含义，再输出B/L数值，便于逐行检查；不输出任务三权阵。
 bool WriteRtkFunctionModel(ostream& out, const rtk_function_model_t& model)
 {
-    if (!out.good() || !ValidModel(model))
-    {
-        return false;
-
-    }
-    // 临时使用15位有效数字；结束时恢复调用者原有的流格式。
-    const auto old_flags = out.flags();
-    const auto old_precision = out.precision();
-    out << defaultfloat << setprecision(15);
-    out << "FUNCTION_MODEL week=" << model.time.week << " sow=" << model.time.sec
-        << " dt_s=" << model.time_diff << " nv=" << model.observation_count
-        << " nx=" << model.parameter_count << " dof=" << model.observation_count - model.parameter_count
-        << " frequencies=" << model.frequency_count << " dd_pairs=" << model.double_difference_count << '\n';
-    out << "CONVENTION SD=rover-base DD=sat-reference L_unit=m N_unit=cycle\n";
-    out << "BASE_XYZ_m " << model.base_xyz[0] << ' ' << model.base_xyz[1] << ' ' << model.base_xyz[2] << '\n';
-    out << "BASE_POSITION_SOURCE " << (model.base_xyz_is_known ? "KNOWN" : "SPP") << '\n';
-    out << "ROVER_LINEARIZATION_XYZ_m " << model.rover_xyz[0] << ' ' << model.rover_xyz[1] << ' ' << model.rover_xyz[2] << '\n';
-    out << "REFERENCE GPS=" << (model.gps_reference_sat ? sat2id(model.gps_reference_sat) : "NONE")
-        << " BDS=" << (model.bds_reference_sat ? sat2id(model.bds_reference_sat) : "NONE")
-        << " gps_sats=" << model.gps_satellite_count << " bds_sats=" << model.bds_satellite_count << '\n';
-    // PARAM解释每一列未知数；ROW解释每一行来自哪颗星、哪种观测。
-    out << "PARAM 0 dX_m\nPARAM 1 dY_m\nPARAM 2 dZ_m\n";
-    for (const dd_ambiguity_info_t& ambiguity : model.ambiguities)
-    {
-        out << "PARAM " << ambiguity.column << " N_DD_cycle " << SystemName(ambiguity.sys)
-            << ' ' << FrequencyName(ambiguity.sys, ambiguity.frequency) << " sat=" << sat2id(ambiguity.sat)
-            << " ref=" << sat2id(ambiguity.reference_sat) << " wavelength_m=" << ambiguity.wavelength << '\n';
-    }
-        
+    if (!out.good() || !ValidModel(model)) return false;
+    const auto flags = out.flags();
+    const auto precision = out.precision();
+    out << fixed << setprecision(3) << ">RTK: " << model.time.week << ' ' << model.time.sec << "\n\n";
+    out << "观测值数量=" << model.observation_count << " 待估状态数量=" << setw(2) << model.parameter_count
+        << " GPSRef=" << (model.gps_reference_sat ? sat2id(model.gps_reference_sat) : "G00")
+        << " BDSRef=" << (model.bds_reference_sat ? sat2id(model.bds_reference_sat) : "C00")
+        << " CommonSats=";
+    vector<int> satellites;
+    if (model.gps_reference_sat) satellites.push_back(model.gps_reference_sat);
+    if (model.bds_reference_sat) satellites.push_back(model.bds_reference_sat);
+    for (const auto& row : model.rows)
+        if (row.frequency == 0 && row.type == RtkObservationType::Phase) satellites.push_back(row.sat);
+    sort(satellites.begin(), satellites.end());
+    for (int sat : satellites) out << sat2id(sat) << ' ';
+    out << "\n\n初始流动站坐标（roveSPP-XYZ）：";
+    for (double value : model.rover_xyz) out << setw(15) << value;
+    out << (model.base_xyz_is_known ? "\n初始基准站坐标（真实值-XYZ） ：" : "\n初始基准站坐标（baseSPP-XYZ）：");
+    for (double value : model.base_xyz) out << setw(15) << value;
+    out << "\n\n";
+    writeMatrix(out, model.B, "设计矩阵：");
+    out << "双差残差：\n" << setprecision(6);
     for (int r = 0; r < model.observation_count; ++r)
     {
-        const dd_row_info_t& row = model.rows[r];
-        out << "ROW " << r << ' ' << SystemName(row.sys) << ' ' << FrequencyName(row.sys, row.frequency)
-            << ' ' << (row.type == RtkObservationType::Phase ? "PHASE" : "CODE")
-            << " sat=" << sat2id(row.sat) << " ref=" << sat2id(row.reference_sat)
-            << " ambiguity_col=" << row.ambiguity_column << " lli=" << static_cast<int>(row.lli) << '\n';
+        const auto& row = model.rows[r];
+        out << sat2id(row.sat) << " f" << row.frequency + 1
+            << (row.type == RtkObservationType::Phase ? " DDL:" : " DDP:")
+            << setw(15) << model.L[r][0] << '\n';
     }
-    // 矩阵头记录行列数，随后逐行写数值；END标记本历元模型结束。
-    out << "B " << model.observation_count << ' ' << model.parameter_count << '\n';
-    for (const auto& row : model.B)
-    {
-        for (int c = 0; c < model.parameter_count; ++c)
-            out << (c == 0 ? "" : " ") << row[c];
-        out << '\n';
-    }
-    out << "L " << model.observation_count << " 1\n";
-    for (const auto& row : model.L)
-    {
-        out << row[0] << '\n';
-
-    }
-    out << "END_FUNCTION_MODEL\n";
-    out.flags(old_flags);
-    out.precision(old_precision);
+    out << '\n';
+    out.flags(flags);
+    out.precision(precision);
     return out.good();
 }
