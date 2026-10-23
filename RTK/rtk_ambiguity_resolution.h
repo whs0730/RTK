@@ -25,7 +25,10 @@ struct rtk_ambiguity_solution_t
     double ratio = 0.0;             // 最优二次型为0且次优大于0时取正无穷
     double ratio_threshold = 2.0;
     rtk_integer_candidates_t candidates;
-    Matrix float_ambiguities;       // 与输入solution.ambiguities同序，cycle
+    int total_ambiguities = 0;
+    int excluded_ambiguities = 0;   // 半周未知，不施加整周约束，仍保留在FLOAT滤波中
+    Matrix float_ambiguities;       // 仅包含参与搜索的子集，与本结果ambiguities同序，cycle
+    // column保留输入完整FLOAT状态的列号，不按子集重新编号。
     vector<dd_ambiguity_info_t> ambiguities;
     double rover_xyz[3]{};
     double baseline_xyz[3]{};
@@ -43,7 +46,8 @@ bool SearchRtkIntegerAmbiguities(const Matrix& float_ambiguities, const Matrix& 
 // 仅更新当前历元输出，不修改浮点solution或跨历元filter，也不进行fix-and-hold。
 // Ratio未通过属于正常FLOAT结果。搜索/更新失败返回false；若浮点位置本身有效，
 // result在已复制有效浮点位置后仍保留FLOAT，原因见error_message；输入基础检查失败时valid=false。
-// 存在未解决半周标志时不搜索，返回true且fixed=false；Ratio等于阈值也不固定。
+// 半周未知的双差不参与整数搜索，其余子集仍可固定；全部不合格时正常返回FLOAT。
+// FIX仅表示所选子集通过检验，不表示输入全部模糊度均固定；Ratio等于阈值不固定。
 bool ResolveRtkAmbiguities(const rtk_solution_t& float_solution,
     const rtk_ambiguity_options_t& options, rtk_ambiguity_solution_t& result);
 

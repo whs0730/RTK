@@ -343,6 +343,7 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
         FactorCovariance(input.covariance, scale);
         // 先保留可输出的FLOAT，后续任何搜索、Ratio或条件位置更新失败都不提交部分FIX。
         CopyFloatPosition(input, result);
+        result.total_ambiguities = n;
         if (!isfinite(options.ratio_threshold) || options.ratio_threshold <= 1.0 || options.max_search_iterations < 1)
             throw runtime_error("Invalid ambiguity resolution options");
         if (!ValidMatrix(input.ambiguity_covariance, n, n) ||
@@ -350,8 +351,6 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
             throw runtime_error("Ambiguity covariance blocks or mapping dimensions disagree");
         // QNN和QXN必须取自同一个完整协方差且与模糊度列映射同序，不能用重排后的块。
         set<tuple<int, int, int>> mapping;
-        result.float_ambiguities = zeros(n, 1);
-        result.ambiguities = input.ambiguities;
         for (int i = 0; i < n; ++i)
         {
             const auto& item = input.ambiguities[i];
@@ -361,7 +360,6 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
                 !isfinite(item.wavelength) || item.wavelength <= 0.0 ||
                 !mapping.emplace(item.sat, item.reference_sat, item.frequency).second)
                 throw runtime_error("Invalid or duplicate ambiguity column mapping");
-            result.float_ambiguities[i][0] = input.x[i + 3][0];
             for (int j = 0; j < nx; ++j)
             {
                 const double block = j < 3 ? input.position_ambiguity_covariance[j][i] : input.ambiguity_covariance[i][j - 3];
@@ -369,16 +367,47 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
                     throw runtime_error("QNN/QXN disagree with full covariance");
             }
         }
+        vector<bool> eligible(n, true);
         for (const auto& row : input.rows)
         {
-            // 奇偶校验未通过的相位仍可参与浮点估计，但此时不作整周约束。
-            if (row.type == RtkObservationType::Phase && (row.lli & LLI_HALFC))
-            {
-                result.error_message = "Unresolved half-cycle flag; retained FLOAT";
-                return true;
-            }
+            if (row.type != RtkObservationType::Phase) continue;
+            const int index = row.ambiguity_column - 3;
+            if (index < 0 || index >= n) throw runtime_error("Invalid phase ambiguity column");
+            const auto& item = input.ambiguities[index];
+            if (row.sys != item.sys || row.frequency != item.frequency || row.sat != item.sat ||
+                row.reference_sat != item.reference_sat)
+                throw runtime_error("Phase row and ambiguity mapping disagree");
+            // row.lli已合并两站与参考星标志，参考星半周未知会排除该频点涉及的全部双差。
+            if (row.lli & LLI_HALFC) eligible[index] = false;
         }
-        if (!SearchRtkIntegerAmbiguities(result.float_ambiguities, input.ambiguity_covariance,
+        vector<int> selected;
+        for (int i = 0; i < n; ++i)
+        {
+            if (eligible[i]) selected.push_back(i);
+        }
+        const int used = static_cast<int>(selected.size());
+        result.excluded_ambiguities = n - used;
+        if (used == 0)
+        {
+            result.error_message = "No eligible ambiguities (unresolved half-cycle); retained FLOAT";
+            return true;
+        }
+        Matrix qnn = zeros(used, used), qxn = zeros(3, used);
+        result.float_ambiguities = zeros(used, 1);
+        for (int i = 0; i < used; ++i)
+        {
+            const int source = selected[i];
+            result.ambiguities.push_back(input.ambiguities[source]);
+            result.float_ambiguities[i][0] = input.x[source + 3][0];
+            for (int j = 0; j < used; ++j)
+            {
+                qnn[i][j] = input.ambiguity_covariance[source][selected[j]];
+            }
+            for (int axis = 0; axis < 3; ++axis)
+                qxn[axis][i] = input.position_ambiguity_covariance[axis][source];
+        }
+        // 用同一组索引同时抽取N、QNN、QXN，保留子集内完整相关性。
+        if (!SearchRtkIntegerAmbiguities(result.float_ambiguities, qnn,
             options.max_search_iterations, result.candidates)) throw runtime_error(result.candidates.error_message);
         result.ratio = result.candidates.squared_norms[0] == 0.0 ? numeric_limits<double>::infinity() :
             result.candidates.squared_norms[1] / result.candidates.squared_norms[0];
@@ -386,15 +415,15 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
         if (!(result.ratio > options.ratio_threshold)) return true;
 
         vector<double> ambiguity_scale;
-        const Matrix lower = FactorCovariance(input.ambiguity_covariance, ambiguity_scale);
-        Matrix delta = zeros(n, 1);
-        for (int i = 0; i < n; ++i) delta[i][0] = result.candidates.integers[i][0] - result.float_ambiguities[i][0];
+        const Matrix lower = FactorCovariance(qnn, ambiguity_scale);
+        Matrix delta = zeros(used, 1);
+        for (int i = 0; i < used; ++i) delta[i][0] = result.candidates.integers[i][0] - result.float_ambiguities[i][0];
         // 条件均值：X_fixed=X_float+QXN*QNN^-1*(N_integer-N_float)。
         // delta以周为单位，QXN以m*cycle为单位，因此位置改正为m；顺序反转会改变改正符号。
-        const Matrix correction = mul(input.position_ambiguity_covariance, SolveCovariance(lower, ambiguity_scale, delta));
+        const Matrix correction = mul(qxn, SolveCovariance(lower, ambiguity_scale, delta));
         // 条件协方差QXX_fixed=QXX-QXN*QNN^-1*QNX，只有对称化和正定检查通过后才接受。
-        Matrix fixed_covariance = sub(result.position_covariance, mul(input.position_ambiguity_covariance,
-            SolveCovariance(lower, ambiguity_scale, transpose(input.position_ambiguity_covariance))));
+        Matrix fixed_covariance = sub(result.position_covariance, mul(qxn,
+            SolveCovariance(lower, ambiguity_scale, transpose(qxn))));
         for (int i = 0; i < 3; ++i)
             for (int j = 0; j < i; ++j) fixed_covariance[i][j] = fixed_covariance[j][i] =
                 0.5 * fixed_covariance[i][j] + 0.5 * fixed_covariance[j][i];
@@ -441,7 +470,10 @@ bool WriteRtkAmbiguitySolution(ostream& out, const rtk_ambiguity_solution_t& sol
     out << "RTK_AR week=" << solution.time.week << " sow=" << solution.time.sec
         << " status=" << (solution.fixed ? "FIX" : "FLOAT") << " ratio=" << solution.ratio
         << " threshold=" << solution.ratio_threshold << " search_ok=" << solution.candidates.valid
-        << " search_iterations=" << solution.candidates.search_iterations << '\n';
+        << " search_iterations=" << solution.candidates.search_iterations
+        << " ambiguities_total=" << solution.total_ambiguities
+        << " ambiguities_used=" << solution.ambiguities.size()
+        << " ambiguities_excluded=" << solution.excluded_ambiguities << '\n';
     if (!solution.error_message.empty()) out << "AR_MESSAGE " << solution.error_message << '\n';
     out << "ROVER_XYZ_m " << solution.rover_xyz[0] << ' ' << solution.rover_xyz[1] << ' ' << solution.rover_xyz[2] << '\n';
     out << "BASELINE_XYZ_m " << solution.baseline_xyz[0] << ' ' << solution.baseline_xyz[1] << ' ' << solution.baseline_xyz[2] << '\n';
@@ -472,7 +504,8 @@ bool WriteRtkAmbiguitySolution(ostream& out, const rtk_ambiguity_solution_t& sol
 bool WriteRtkAmbiguitySolutionCsvHeader(ostream& out)
 {
     out << "week,sow,status,ratio,search_ok,search_iterations,best_squared_norm,second_squared_norm,"
-        "X_m,Y_m,Z_m,dX_m,dY_m,dZ_m,E_m,N_m,U_m,std_X_m,std_Y_m,std_Z_m\n";
+        "X_m,Y_m,Z_m,dX_m,dY_m,dZ_m,E_m,N_m,U_m,std_X_m,std_Y_m,std_Z_m,"
+        "ambiguities_total,ambiguities_used,ambiguities_excluded\n";
     return out.good();
 }
 
@@ -492,6 +525,7 @@ bool WriteRtkAmbiguitySolutionCsv(ostream& out, const rtk_ambiguity_solution_t& 
     for (double v : solution.baseline_xyz) out << ',' << v;
     for (double v : solution.baseline_enu) out << ',' << v;
     for (int i = 0; i < 3; ++i) out << ',' << sqrt(solution.position_covariance[i][i]);
+    out << ',' << solution.total_ambiguities << ',' << solution.ambiguities.size() << ',' << solution.excluded_ambiguities;
     out << '\n';
     out.flags(flags);
     out.precision(precision);

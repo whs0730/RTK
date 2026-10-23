@@ -82,9 +82,9 @@ static void DecodeReceivedFrames(rtk_stream_receiver_t& receiver,
         }
         const size_t frame_size = static_cast<size_t>(U2(buffer.data() + 8)) + OEM4HLEN + 4;
         const int type = U2(buffer.data() + 4);
-        if (type != ID_RANGECMP && type != ID_GPSEPHEM && type != ID_BDSEPHEMERIS)
+        const bool observation = type == ID_RANGE || type == ID_RANGECMP;
+        if (!observation && type != ID_GPSEPHEM && type != ID_BDSEPHEMERIS)
         {
-            // RANGE必须在解码前跳过，避免同秒重复交付并修改锁定/LLI历史。
             receiver.remaining_skip_bytes = frame_size;
             continue;
         }
@@ -99,12 +99,13 @@ static void DecodeReceivedFrames(rtk_stream_receiver_t& receiver,
         // 现有星历解码器按固定偏移读取字段，短报文不能交给它更新导航缓存。
         const size_t minimum_payload = type == ID_GPSEPHEM ? 204 : type == ID_BDSEPHEMERIS ? 196 : 4;
         bool payload_valid = payload_size >= minimum_payload;
-        if (payload_valid && type == ID_RANGECMP)
+        if (payload_valid && observation)
         {
-            // RANGECMP正文为4字节记录数加每条24字节记录，声明数量不能越过正文末尾。
+            // 两种观测正文均以4字节记录数开头，RANGE每条44字节，RANGECMP每条24字节。
             uint32_t observations = 0;
             memcpy(&observations, buffer.data() + OEM4HLEN, sizeof(observations));
-            payload_valid = observations <= (payload_size - 4) / 24;
+            const size_t record_size = type == ID_RANGE ? 44 : 24;
+            payload_valid = observations <= (payload_size - 4) / record_size;
         }
         if (!payload_valid)
         {
@@ -112,7 +113,8 @@ static void DecodeReceivedFrames(rtk_stream_receiver_t& receiver,
             DiscardBytes(buffer, frame_size);
             continue;
         }
-        if (type == ID_RANGECMP && IsObservationNotNew(receiver, statistics))
+        // 同一时刻可能同时输出两种格式，只接受首个成功解码的历元，后续副本不更新锁定/LLI。
+        if (observation && IsObservationNotNew(receiver, statistics))
         {
             DiscardBytes(buffer, frame_size);
             continue;
@@ -130,7 +132,7 @@ static void DecodeReceivedFrames(rtk_stream_receiver_t& receiver,
         }
         if (result != 1 || receiver.raw.obs.n <= 0) continue;
 
-        // 与离线RTK一致，每个完整RANGECMP报文交付一个观测历元。
+        // RANGE和RANGECMP均复用现有解码器，成功后保存为同一种测站历元。
         // 导航数据一同快照，避免稍后接收的星历改变队列中旧历元的计算条件。
         auto epoch = make_unique<station_state_t>();
         epoch->raw = receiver.raw;

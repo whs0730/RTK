@@ -1,5 +1,6 @@
 ﻿#include "decode.h"
 #include <iostream>
+#include <limits>
 // 字节序转换和数据解析工具：NovAtel 二进制字段采用小端存储。
 static uint8_t U1(const uint8_t* p) { return *p; }
 uint16_t U2(uint8_t* p) { uint16_t u; memcpy(&u, p, 2); return u; }
@@ -223,6 +224,21 @@ static int obsindex(obs_t* obs, gtime_t time, int sat) {
     return i;
 }
 
+// RANGE锁定时间为Float32。长计数会出现不足1秒、随后补回的台阶增量，
+// 用两级相邻浮点间距作为计数台阶余量；计数回落仍直接判失锁，不受该余量影响。
+static bool RangeLockTimeSlip(double current, double previous, double dt)
+{
+    if (!std::isfinite(current) || !std::isfinite(previous) || !std::isfinite(dt) ||
+        current < 0.0 || previous < 0.0 || current < previous) return true;
+    const float now = static_cast<float>(current);
+    const float old = static_cast<float>(previous);
+    const double now_step = std::nextafter(now, std::numeric_limits<float>::infinity()) - now;
+    const double old_step = std::nextafter(old, std::numeric_limits<float>::infinity()) - old;
+    const double step = now_step > old_step ? now_step : old_step;
+    const double tolerance = 0.05 + 2.0 * step;
+    return current - previous + tolerance <= dt;
+}
+
 // ------------------ 解码函数 ------------------
 // 解码 RANGEB 消息（NovAtel Raw Range Binary）(原始观测值报文)
 //可以读取伪距 P，载波相位 L，多普勒 D，信噪比 SNR，锁定时间 lockt，跟踪状态字 track status
@@ -263,7 +279,7 @@ static int decode_rangeb(raw_t* raw) {
         if (raw->tobs[sat - 1][idx].week != 0) {
             //计算当前观测时间和上一条观测时间的时间差
             tt = timediff(raw->time, raw->tobs[sat - 1][idx]);
-            lli = (lockt - raw->lockt[sat - 1][idx] + 0.05 <= tt) ? LLI_SLIP : 0;
+            lli = RangeLockTimeSlip(lockt, raw->lockt[sat - 1][idx], tt) ? LLI_SLIP : 0;
         }
         else {
             lli = 0;
