@@ -45,7 +45,7 @@ enum class RtkStreamReadResult
 struct rtk_stream_receiver_t;
 
 // 两站各自解码RANGE/RANGECMP并缓存最近5个观测历元，配对后复用SPP与共同星历准备流程。
-// 不设置函数模型的已知基站坐标；接入实时主流程时应采用RTS1资料中的基站坐标。
+// 基站几何坐标由主流程按数据源配置，本类保留两站独立SPP结果。
 // 单实例由同一线程调用；队列仅用于吸收两路到达时延差，不外推、插值或补齐缺失观测。
 class RtkStream
 {

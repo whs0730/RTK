@@ -538,6 +538,14 @@ bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],
         }
         base_xyz = options.known_base_xyz;
     }
+    else if (options.use_fixed_spp_base_xyz)
+    {
+        if (!ValidXYZ(options.fixed_spp_base_xyz))
+        {
+            return Fail(model, "Fixed SPP base coordinates are not valid");
+        }
+        base_xyz = options.fixed_spp_base_xyz;
+    }
     if (!ValidTime(epoch.time) || !ValidTime(epoch.base_obs.data[0].time) ||
         !ValidTime(epoch.rover_obs.data[0].time) ||
         fabs(timediff(epoch.base_obs.data[0].time, epoch.time)) >= config.sync_tolerance ||

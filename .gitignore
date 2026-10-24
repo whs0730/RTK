@@ -40,3 +40,5 @@ SPP/spp_solution.txt
 .ai-memory.toml
 AGENTS.md
 HANDOFF.md
+
+*.py

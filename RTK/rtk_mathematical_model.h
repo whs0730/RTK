@@ -19,9 +19,11 @@ struct rtk_model_options_t
     bool use_bds = true;
     int frequency_count = 2;       // 1：L1/B1I，2：L1/L2和B1I/B3I
     bool exclude_bds_geo_reference = true; // 仅禁止GEO作参考星，不剔除GEO非参考星
-    // 有已知基站坐标时用于几何计算；关闭时使用本历元基站SPP概略坐标。
+    // 已知坐标优先于固定SPP基准；两者均关闭时使用本历元基站SPP。
     bool use_known_base_xyz = false;
     double known_base_xyz[3]{};    // ECEF XYZ，单位m；不覆盖epoch.base_spp
+    bool use_fixed_spp_base_xyz = false;
+    double fixed_spp_base_xyz[3]{}; // ECEF XYZ，单位m；固定的SPP概略值，不作为精确真值标记
 };
 
 // 记录B和L中每一行对应哪条双差观测

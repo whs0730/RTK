@@ -48,8 +48,10 @@ static void PrintUsage(ostream& out)
 	out << "Usage:\n"
 		<< "  RTK.exe\n"
 		<< "  RTK.exe --stream [base_ip base_port rover_ip rover_port]\n"
+		<< "  RTK.exe --stream-rooftop [base_ip base_port rover_ip rover_port]\n"
 		<< "Offline reads the default files configured in rtk_main.cpp.\n"
-		<< "Realtime uses the RTS1 base coordinates in STREAM_BASE_XYZ.\n"
+		<< "--stream uses the RTS1 base coordinates in STREAM_BASE_XYZ.\n"
+		<< "Rooftop uses 8.148.22.229:2002/3002 and fixes the first valid base SPP coordinate.\n"
 		<< "Press Ctrl+C to finish realtime processing and close output files.\n";
 }
 
@@ -68,6 +70,7 @@ static bool ParseCommandLine(
 	int argc,
 	char* argv[],
 	bool& realtime,
+	bool& rooftop,
 	rtk_stream_options_t& stream_options)
 {
 	if (argc == 1) return true;
@@ -81,8 +84,49 @@ static bool ParseCommandLine(
 		return !stream_options.base_ip.empty() && !stream_options.rover_ip.empty() &&
 			ParsePort(argv[3], stream_options.base_port) && ParsePort(argv[5], stream_options.rover_port);
 	}
+	else if (strcmp(argv[1], "--stream-rooftop") == 0)
+	{
+		if (argc != 2 && argc != 6)
+		{
+			return false;
+		}
+		realtime = true;
+		rooftop = true;
+		stream_options.base_ip = "8.148.22.229";
+		stream_options.base_port = 2002;
+		stream_options.rover_ip = "8.148.22.229";
+		stream_options.rover_port = 3002;
+		if (argc == 2)
+		{
+			return true;
+		}
+		stream_options.base_ip = argv[2];
+		stream_options.rover_ip = argv[4];
+		return !stream_options.base_ip.empty() && !stream_options.rover_ip.empty() &&
+			ParsePort(argv[3], stream_options.base_port) && ParsePort(argv[5], stream_options.rover_port);
+	}
 	return false;
 }
+
+static void InitializeRooftopBase(const rtk_epoch_t& epoch, rtk_model_options_t& options)
+{
+	if (options.use_fixed_spp_base_xyz)
+	{
+		return;
+	}
+	// 基站逐历元SPP会抖动；固定本次运行的概略基准，避免EKF因基站坐标变化反复重置。
+	for (int axis = 0; axis < 3; ++axis)
+	{
+		options.fixed_spp_base_xyz[axis] = epoch.base_spp.XYZ[axis];
+	}
+	options.use_fixed_spp_base_xyz = true;
+	const auto precision = cout.precision();
+	cout << setprecision(15) << "Rooftop base reference: first prepared base SPP, fixed approximate ECEF(m)="
+		<< options.fixed_spp_base_xyz[0] << ' ' << options.fixed_spp_base_xyz[1] << ' '
+		<< options.fixed_spp_base_xyz[2] << endl;
+	cout.precision(precision);
+}
+
 int main(int argc,char*argv[])
 {
 	if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0))
@@ -91,13 +135,14 @@ int main(int argc,char*argv[])
 		return EXIT_SUCCESS;
 	}
 	bool realtime = false;
+	bool rooftop = false;
 	FILE* base_fp = nullptr;
 	FILE* rover_fp = nullptr;
 	const string input_base_file = DEFAULT_INPUT_BASE_FILE;
 	const string input_rover_file = DEFAULT_INPUT_ROVER_FILE;
 	rtk_stream_options_t stream_options;
 	RtkStream stream;
-	if (!ParseCommandLine(argc, argv, realtime, stream_options))
+	if (!ParseCommandLine(argc, argv, realtime, rooftop, stream_options))
 	{
 		PrintUsage(cerr);
 		return EXIT_FAILURE;
@@ -124,7 +169,7 @@ int main(int argc,char*argv[])
 		return -1;
 	}
 	// 实时输出使用独立后缀；同一模式再次运行会覆盖此前同名文件。
-	const string output_suffix = realtime ? "_realtime" : "_3_3";
+	const string output_suffix = rooftop ? "_realtime_rooftop" : realtime ? "_realtime" : "_3_3";
 	ofstream base_obs_out("base_observations" + output_suffix + ".txt");
 	ofstream rover_obs_out("rover_observations" + output_suffix + ".txt");
 	ofstream prepared_out("rtk_prepared" + output_suffix + ".txt");
@@ -164,6 +209,10 @@ int main(int argc,char*argv[])
 	for (int axis = 0; axis < 3; ++axis)
 	{
 		model_options.known_base_xyz[axis] = realtime ? STREAM_BASE_XYZ[axis] : KNOWN_BASE_XYZ[axis];
+	}
+	if (rooftop)
+	{
+		model_options.use_known_base_xyz = false;
 	}
 	rtk_function_model_t function_model;
 	//主流程使用高度角定权，伪距/相位方差比10000
@@ -274,6 +323,10 @@ int main(int argc,char*argv[])
 			}
 			if (prepared_ok)
 			{
+				if (rooftop)
+				{
+					InitializeRooftopBase(*rtk_epoch, model_options);
+				}
 				cout << "COMMON week=" << rtk_epoch->time.week
 					<< " sow=" << rtk_epoch->time.sec
 					<< " GPS=" << rtk_epoch->common_gps
@@ -490,7 +543,8 @@ int main(int argc,char*argv[])
 		<< " BDS=" << model_options.use_bds
 		<< " frequencies=" << model_options.frequency_count << endl;
 	cout << "Base coordinate source: "
-		<< (model_options.use_known_base_xyz ? "KNOWN" : "SPP") << endl;
+		<< (rooftop ? (model_options.use_fixed_spp_base_xyz ? "SPP_FIXED_APPROX" : "SPP_NOT_INITIALIZED") :
+			model_options.use_known_base_xyz ? "KNOWN" : "SPP") << endl;
 	if (realtime)
 	{
 		const auto& statistics = stream.Statistics();
