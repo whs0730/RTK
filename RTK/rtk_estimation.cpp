@@ -131,7 +131,7 @@ static bool ValidModels(const rtk_function_model_t& model, const rtk_stochastic_
     const int nx = model.parameter_count;
     if (!model.error_message.empty() || !stochastic.error_message.empty() || nx < 4 || nv < nx ||
         !ValidMatrix(model.B, nv, nx) || !ValidMatrix(model.L, nv, 1) ||
-        !ValidMatrix(stochastic.D, nv, nv) || !ValidMatrix(stochastic.P, nv, nv) ||
+        static_cast<int>(stochastic.D.size()) != nv || static_cast<int>(stochastic.P.size()) != nv ||
         static_cast<int>(model.rows.size()) != nv || static_cast<int>(stochastic.rows.size()) != nv ||
         static_cast<int>(model.ambiguities.size()) != nx - 3 || stochastic.observation_count != nv ||
         model.time.week != stochastic.time.week || model.time.sec != stochastic.time.sec ||
@@ -260,7 +260,7 @@ bool SolveRtkLeastSquares(const rtk_function_model_t& model,
     }
     try
     {
-        // D与P分别通过正定性检查后，还要核对P=D^-1，避免混用不同定权参数的模型。
+        // CovarianceInverse统一检查方阵结构、有限性和正定性；再核对P=D^-1，避免混用定权参数。
         const Matrix inverse_d = CovarianceInverse(stochastic.D);
         CovarianceInverse(stochastic.P);
         for (int i = 0; i < model.observation_count; ++i)
@@ -284,7 +284,7 @@ bool SolveRtkLeastSquares(const rtk_function_model_t& model,
         solution.iterations = 1;
         return true;
     }
-    catch (const exception& error)
+    catch (const runtime_error& error)
     {
         return Fail(solution, string("RTK least squares failed: ") + error.what());
     }
@@ -456,7 +456,7 @@ static double InitialAmbiguity(const rtk_function_model_t& model, const dd_ambig
     }
     if (phase_row < 0 || code_row < 0)
     {
-        throw runtime_error("Missing code/phase pair for ambiguity initialization");
+        throw logic_error("Missing code/phase pair for ambiguity initialization");
     }
     // 同一双差的相位和伪距含相同几何项，相减后除波长得到绝对模糊度初值(周)。
     return (model.L[phase_row][0] - model.L[code_row][0]) / ambiguity.wavelength;
@@ -681,7 +681,7 @@ bool EstimateRtkEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,
         filter = next;
         return true;
     }
-    catch (const exception& error)
+    catch (const runtime_error& error)
     {
         return Fail(solution, string("RTK estimation failed: ") + error.what());
     }

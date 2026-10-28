@@ -57,7 +57,7 @@ static void PrintUsage(ostream& out)
 
 static bool ParsePort(const char* text, unsigned short& port)
 {
-	if (text == nullptr || text[0] < '0' || text[0] > '9') return false;
+	if (text[0] < '0' || text[0] > '9') return false;
 	char* end = nullptr;
 	const unsigned long value = strtoul(text, &end, 10);
 	if (*end != '\0' || value == 0 || value > 65535) return false;
@@ -157,12 +157,12 @@ int main(int argc,char*argv[])
 			return EXIT_FAILURE;
 		}
 	}
-	else if (fopen_s(&base_fp, input_base_file.c_str(), "rb") != 0 || base_fp == nullptr)
+	else if (fopen_s(&base_fp, input_base_file.c_str(), "rb") != 0)
 	{
 		cerr << "Can't open base file: " << input_base_file << endl;
 		return -1;
 	}
-	if (!realtime && (fopen_s(&rover_fp, input_rover_file.c_str(), "rb") != 0 || rover_fp == nullptr))
+	if (!realtime && fopen_s(&rover_fp, input_rover_file.c_str(), "rb") != 0)
 	{
 		cerr << "Can't open rover file: " << input_rover_file << endl;
 		fclose(base_fp);

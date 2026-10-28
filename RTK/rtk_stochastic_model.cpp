@@ -1,6 +1,6 @@
 #include "rtk_stochastic_model.h"
 #include <cmath>
-#include <exception>
+#include <stdexcept>
 #include <iomanip>
 using namespace std;
 
@@ -306,6 +306,10 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
                 int j = indices[b];
                 model.D[i][j] = reference_variance + (i == j ? model.target_sd_variance[i] : 0.0);
             }
+            if (!Positive(model.D[i][i]))
+            {
+                return Fail(model, "随机模型数值溢出或矩阵无效");
+            }
         }
     }
 
@@ -315,7 +319,7 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
     {
         model.P = inverse(model.D);
     }
-    catch (const exception &error)
+    catch (const runtime_error &error)
     {
         return Fail(model, string("权阵求逆失败：") + error.what());
     }
@@ -330,6 +334,21 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
             model.P[j][i] = value;
         }
     }
+    // 维数与行映射由本函数构造；求逆后的有限性和正方差仍需检查。
+    for (int i = 0; i < n; ++i)
+    {
+        if (!Positive(model.P[i][i]))
+        {
+            return Fail(model, "随机模型数值溢出或矩阵无效");
+        }
+        for (double value : model.P[i])
+        {
+            if (!isfinite(value))
+            {
+                return Fail(model, "随机模型数值溢出或矩阵无效");
+            }
+        }
+    }
 
     // 全局矩阵始终按任务二原行号填入；即使行序被交错排列，也无需重新排B和L。
     model.time = function_model.time;
@@ -339,10 +358,6 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
     model.bds_reference_sat = function_model.bds_reference_sat;
     model.options = options;
     model.rows = function_model.rows;
-    if (!ValidOutput(model))
-    {
-        return Fail(model, "随机模型数值溢出或矩阵无效");
-    }
     return true;
 }
 

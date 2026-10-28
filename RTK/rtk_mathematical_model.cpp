@@ -405,7 +405,7 @@ static void BuildDesignMatrix(const vector<sd_obs_t>& sd, rtk_function_model_t& 
 // L=O-C为双差观测量减双差几何距离，大小为nv×1。
 // 相位已乘波长转换为米；不扣除模糊度初值，因为未知数是绝对双差N。
 // 短基线模型只扣几何项，不在此叠加钟差、大气或无电离层组合改正。
-static void BuildResidualVector(const vector<sd_obs_t>& sd, rtk_function_model_t& model)
+static bool BuildResidualVector(const vector<sd_obs_t>& sd, rtk_function_model_t& model)
 {
     model.L = zeros(model.observation_count, 1);
     for (int r = 0; r < model.observation_count; ++r)
@@ -419,10 +419,12 @@ static void BuildResidualVector(const vector<sd_obs_t>& sd, rtk_function_model_t
             satellite.phase[f] - reference.phase[f] : satellite.code[f] - reference.code[f];
         // 双差几何项也使用同样顺序，保证B与L的符号约定一致。
         model.L[r][0] = observed - (satellite.geometry - reference.geometry);
+        if (!isfinite(model.L[r][0])) return false;
     }
+    return true;
 }
 
-// 构模和导出前的自检：维数、数值、行列映射及模糊度系数必须一致。
+// 导出前检查调用方传入的模型：维数、数值、行列映射及模糊度系数必须一致。
 // 设双差卫星对数为D、频点数为F：nv=2*F*D，nx=3+F*D。
 static bool ValidModel(const rtk_function_model_t& model)
 {
@@ -575,8 +577,8 @@ bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],
     copy_n(rover_xyz, 3, model.rover_xyz);
     BuildRowAndColumnLayout(groups, sd, options.frequency_count, model);
     BuildDesignMatrix(sd, model);
-    BuildResidualVector(sd, model);
-    if (!ValidModel(model))
+    // 维数和映射由上述构造过程保证；有限观测相减仍可能溢出。
+    if (!BuildResidualVector(sd, model))
         return Fail(model, "Function model dimensions or numeric values are not consistent");
     return true;
 }

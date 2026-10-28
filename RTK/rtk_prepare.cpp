@@ -134,8 +134,6 @@ static bool CalculateAzel(const sol_t& sol, const satpos_t& sat, double azel[2])
 	rec.Z = sol.XYZ[2];
 
 	BLH* blh = XYZtoBLH(rec, 6378137.0, 1.0 / 298.257223563);
-	if (blh == nullptr)
-		return false;
 
 	double los[3] = { dx / rho, dy / rho, dz / rho };
 	satazel(blh, los, azel);

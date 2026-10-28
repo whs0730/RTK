@@ -24,9 +24,8 @@ bool ValidMatrix(const Matrix& a, int rows, int columns)
 
 // Q=S*C*S，S为对角标准差阵；对无量纲C作Cholesky分解，米和周的量级不作为秩判断依据。
 // 返回C的下三角因子，scale保存S；该归一化仅用于检查和线性求解，不改变整数搜索格点。
-Matrix FactorCovariance(const Matrix& q, vector<double>& scale)
+Matrix FactorCovariance(const Matrix& q, int n, vector<double>& scale)
 {
-    const int n = static_cast<int>(q.size());
     if (!ValidMatrix(q, n, n)) throw runtime_error("Invalid covariance dimensions or values");
     scale.resize(n);
     for (int i = 0; i < n; ++i)
@@ -201,7 +200,8 @@ Matrix Search(int n, const vector<double>& lower, const vector<double>& d, const
                     norms[worst] = next_distance;
                     worst = norms[0] > norms[1] ? 0 : 1;
                 }
-                // 有两组候选后以较差者收紧半径，仍需继续搜索直到整棵可行子树穷尽。
+                // 只有两组候选后才收紧半径；此前半径为无穷，有限距离不会进入回溯出口。
+                // 收紧后仍需继续搜索直到整棵可行子树穷尽。
                 if (count == 2) radius = norms[worst];
                 integer[0] += step[0];
                 y = conditional[0] - integer[0];
@@ -212,7 +212,6 @@ Matrix Search(int n, const vector<double>& lower, const vector<double>& d, const
         {
             if (k == n - 1)
             {
-                if (count != 2) throw runtime_error("Fewer than two integer candidates");
                 return candidates;
             }
             ++k;
@@ -247,10 +246,10 @@ bool SearchRtkIntegerAmbiguities(const Matrix& ambiguities, const Matrix& covari
     try
     {
         const int n = static_cast<int>(ambiguities.size());
-        if (!ValidMatrix(ambiguities, n, 1) || !ValidMatrix(covariance, n, n) || max_search_iterations < 1)
+        if (!ValidMatrix(ambiguities, n, 1) || max_search_iterations < 1)
             throw runtime_error("Invalid integer search input");
         vector<double> scale;
-        const Matrix cholesky = FactorCovariance(covariance, scale);
+        const Matrix cholesky = FactorCovariance(covariance, n, scale);
         vector<double> q(n * n), lower(n * n), d(n), z(n * n), transformed(n);
         for (int i = 0; i < n; ++i)
         {
@@ -273,7 +272,6 @@ bool SearchRtkIntegerAmbiguities(const Matrix& ambiguities, const Matrix& covari
         const Matrix reduced_candidates = Search(n, lower, d, transformed, max_search_iterations, candidates.search_iterations);
         // 搜索结果满足z_integer=Z'*N_integer，反变换后再核对整周性及正向变换的一致性。
         const Matrix inverse_z = inverse(z_transpose);
-        if (!ValidMatrix(inverse_z, n, n)) throw runtime_error("LAMBDA inverse transform failed");
         Matrix integers = mul(inverse_z, reduced_candidates);
         for (auto& row : integers)
             for (double& v : row)
@@ -315,7 +313,7 @@ bool SearchRtkIntegerAmbiguities(const Matrix& ambiguities, const Matrix& covari
         candidates.valid = true;
         return true;
     }
-    catch (const exception& error)
+    catch (const runtime_error& error)
     {
         const int iterations = candidates.search_iterations;
         candidates = rtk_integer_candidates_t{};
@@ -333,14 +331,13 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
     try
     {
         const int nx = input.parameter_count, n = nx - 3;
-        if (!input.valid || n < 1 || !ValidMatrix(input.x, nx, 1) ||
-            !ValidMatrix(input.covariance, nx, nx)) throw runtime_error("Invalid float solution");
+        if (!input.valid || n < 1 || !ValidMatrix(input.x, nx, 1)) throw runtime_error("Invalid float solution");
         for (int i = 0; i < 3; ++i)
             if (!isfinite(input.rover_xyz[i]) || !isfinite(input.base_xyz[i]) ||
                 !isfinite(input.baseline_xyz[i]) || !isfinite(input.baseline_enu[i]))
                 throw runtime_error("Nonfinite float coordinates");
         vector<double> scale;
-        FactorCovariance(input.covariance, scale);
+        FactorCovariance(input.covariance, nx, scale);
         // 先保留可输出的FLOAT，后续任何搜索、Ratio或条件位置更新失败都不提交部分FIX。
         CopyFloatPosition(input, result);
         result.total_ambiguities = n;
@@ -415,7 +412,7 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
         if (!(result.ratio > options.ratio_threshold)) return true;
 
         vector<double> ambiguity_scale;
-        const Matrix lower = FactorCovariance(qnn, ambiguity_scale);
+        const Matrix lower = FactorCovariance(qnn, used, ambiguity_scale);
         Matrix delta = zeros(used, 1);
         for (int i = 0; i < used; ++i) delta[i][0] = result.candidates.integers[i][0] - result.float_ambiguities[i][0];
         // 条件均值：X_fixed=X_float+QXN*QNN^-1*(N_integer-N_float)。
@@ -428,7 +425,7 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
             for (int j = 0; j < i; ++j) fixed_covariance[i][j] = fixed_covariance[j][i] =
                 0.5 * fixed_covariance[i][j] + 0.5 * fixed_covariance[j][i];
         vector<double> position_scale;
-        FactorCovariance(fixed_covariance, position_scale);
+        FactorCovariance(fixed_covariance, 3, position_scale);
         XYZ base{input.base_xyz[0], input.base_xyz[1], input.base_xyz[2]};
         if (hypot(base.X, base.Y) < 1.0) throw runtime_error("Invalid base coordinate for ENU rotation");
         double fixed_rover[3], baseline[3];
@@ -454,7 +451,7 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
         result.fixed = true;
         return true;
     }
-    catch (const exception& error)
+    catch (const runtime_error& error)
     {
         result.error_message = error.what();
         return false;
