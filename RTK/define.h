@@ -9,7 +9,8 @@
 #define OEM3SYNC3       0x11
 #define OEM4HLEN        28          // OEM4/OEM6 报文头长度，解码时用于定位数据体
 #define OEM3HLEN        12
-#define MAXRAWLEN       8192        // 单次原始报文/网口接收缓冲区最大字节数
+#define OEM4RECVLEN     8192        // 单次recv的字节上限，与完整报文长度无关
+#define MAXRAWLEN       (OEM4HLEN + 0xFFFF + 4) // 16位正文长度加长报文头和CRC
 #define MAXOBS          512         // 单历元最多保存的观测值数量
 #define MAXSAT          220         // 内部可编号的最大卫星数量
 #define NFREQ           3           // 基本频点数，P/L/D/SNR/code 数组的主频点部分

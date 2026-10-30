@@ -18,6 +18,7 @@ x64/
 *.pdb
 *.ilk
 OEM7data/
+diagnostics_20261030_133102/
 # 默认忽略运行生成的日志和结果文件。
 *.log
 *.txt

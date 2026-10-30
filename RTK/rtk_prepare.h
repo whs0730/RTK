@@ -63,14 +63,12 @@ struct rtk_epoch_t
     int common_gps = 0;
     int common_bds = 0;
 }; 
-// 从一个测站的OEM文件中读取下一个观测历元。
-// 读取过程中遇到星历报文时，自动更新station.raw.nav。
+// 读取观测过程中遇到的星历写入station.raw.nav；坏报文不结束文件读取。
 bool ReadNextObservationEpoch(
     FILE* fp,
     station_state_t& station
 );
 
-// 比较两个测站当前观测历元。
 // 返回-1：基准站较早；0：同步；1：流动站较早。
 // 调用前应保证两站都有观测；空观测也返回0，不能据此判定同步。
 int CompareStationEpochTime(
@@ -80,11 +78,9 @@ int CompareStationEpochTime(
     double& dt
 );
 
-// 按该站观测计算卫星状态、SPP及多普勒速度；位置成功即返回true，速度允许失败。
-// SPP成功后更新该站的last_spp_sol，不使用另一站或已知基站坐标替代SPP。
-bool ProcessStationEpoch(
-    station_state_t& station
-);
+// 位置成功即返回true，测速失败不否定位置；成功SPP保留为下一历元初值。
+// 两站各自解SPP，不用另一站或已知基站坐标替代。
+bool ProcessStationEpoch(station_state_t& station);
 
 // 两站用同一套有效广播星历，分别重算发射时刻卫星状态并筛选共视星。
 // 各站原有观测、星历、SPP和卫星状态缓存不修改；没有可用共同星历的卫星不参与RTK。

@@ -5,9 +5,6 @@
 #include <iostream>
 using namespace std;
 
-// 任务二仅构建短基线、单历元、非组合双差函数模型
-// 数据流：共视历元 -> 站间单差 -> 分系统选参考星 -> 确定行列映射 -> 构建B、L。
-
 constexpr double DEG_TO_RAD = 3.14159265358979323846 / 180.0;
 
 // 与epoch.common一一对应的站间单差，参考星选择和B/L共用这份数据。
@@ -25,7 +22,7 @@ struct sd_obs_t
     unsigned char lli[2]{};
 };
 
-// 一个系统对应一个分组：一颗参考星 + 若干非参考星，GPS与BDS不跨系统作差。
+// GPS与BDS分别选参考星，不跨系统作差。
 struct system_group_t
 {
     int sys = SYS_NONE;
@@ -33,7 +30,7 @@ struct system_group_t
     vector<int> target_indices;
 };
 
-// 统一失败出口：清空本次构造的中间结果，防止调用者误用上个历元的B/L。
+// 失败时清空B/L和映射，避免调用方继续使用上一历元模型。
 static bool Fail(rtk_function_model_t& model, const string& message)
 {
     model = rtk_function_model_t{};
@@ -41,13 +38,11 @@ static bool Fail(rtk_function_model_t& model, const string& message)
     return false;
 }
 
-// 检查GPS周与周内秒的基本范围；具体两站是否同步由后续timediff判断。
 static bool ValidTime(const gtime_t& time)
 {
     return time.week >= 0 && isfinite(time.sec) && time.sec >= 0.0 && time.sec < 604800.0;
 }
 
-// 排除空指针、NaN/无穷大以及接近原点的无效坐标；坐标单位为米。
 static bool ValidXYZ(const double* xyz)
 {
     return xyz != nullptr && isfinite(xyz[0]) &&
@@ -65,7 +60,6 @@ static double Wavelength(int sys, int frequency)
     return Clight / (frequency == 0 ? FREQ_BDS_B1 : FREQ_BDS_B3);
 }
 
-// 确认观测码属于当前系统和频点，本模型不混用其他频点或组合观测。
 static bool SupportedCode(int sys, int frequency, unsigned char code)
 {
     if (sys == SYS_GPS)
@@ -77,8 +71,6 @@ static bool SupportedCode(int sys, int frequency, unsigned char code)
     return code == (frequency == 0 ? CODE_L2I : CODE_L6I);
 }
 
-// 一个频点必须在两站同时具备有效伪距、相位和足够SNR，且观测码一致。
-// 单频模式只检查下标0；双频模式在调用处分别检查下标0和1。
 static bool ValidFrequency(const obsd_t& base, const obsd_t& rover,int sys, int frequency, double snr_mask)
 {
     return SupportedCode(sys, frequency, base.code[frequency]) &&
@@ -91,7 +83,6 @@ static bool ValidFrequency(const obsd_t& base, const obsd_t& rover,int sys, int 
         isfinite(rover.SNR[frequency]) && rover.SNR[frequency] > snr_mask;
 }
 
-// 用各站接收机坐标和该站保存的卫星坐标计算几何距离rho，单位m。
 static double GeometricRange(const double receiver[3], const double satellite[3])
 {
     return hypot(satellite[0] - receiver[0],satellite[1] - receiver[1], satellite[2] - receiver[2]);
@@ -104,7 +95,6 @@ static bool IsBdsGeo(int sat)
     return satsys(sat, &prn) == SYS_CMP && (prn <= 5 || prn >= 59);
 }
 
-// 逐颗检查共视观测，计算站间单差和流动站坐标偏导。
 // 结构/时刻/坐标错误返回false；高度角或观测质量不达标则跳过该颗卫星。
 static bool ComputeSingleDifference(const rtk_epoch_t& epoch, const double base_xyz[3],
     const double rover_xyz[3], const rtk_config_t& config, const rtk_model_options_t& options,
@@ -153,14 +143,13 @@ static bool ComputeSingleDifference(const rtk_epoch_t& epoch, const double base_
             error = "Invalid satellite coordinates";
             return false;
         }
-        // 复用任务一已保存的各站高度角，不重新实现坐标转换。
+        // 沿用准备阶段的高度角，避免随线性化展开点改变筛星结果。
         if (!isfinite(item.base_azel[1]) || !isfinite(item.rover_azel[1]) || item.base_azel[1] < elevation_mask || item.rover_azel[1] < elevation_mask)
         {
             continue;
 
         }
 
-        // 所选频点全部通过检查后，才让该卫星参与本模型。
         bool frequencies_ok = true;
         for (int f = 0; f < options.frequency_count; ++f)
         {
@@ -173,7 +162,6 @@ static bool ComputeSingleDifference(const rtk_epoch_t& epoch, const double base_
 
         }
 
-        // 基准站坐标在本模型中视为已知量，只估计流动站坐标改正。
         const double base_range = GeometricRange(base_xyz, item.base_sat.pos);
         const double rover_range = GeometricRange(rover_xyz, item.rover_sat.pos);
         if (!isfinite(base_range) || !isfinite(rover_range) ||base_range <= 1.0 || rover_range <= 1.0)
@@ -198,7 +186,7 @@ static bool ComputeSingleDifference(const rtk_epoch_t& epoch, const double base_
             result.code[f] = rover.P[f] - base.P[f];
             // 原始L以周为单位，乘波长后才能与伪距、几何距离统一相减。
             result.phase[f] = Wavelength(sys, f) * (rover.L[f] - base.L[f]);
-            // 合并两站的失锁标志，仅保留信息；这里不进行周跳修复。
+            // 保留两站LLI，交给估计和整数固定模块处理。
             result.lli[f] = base.LLI[f] | rover.LLI[f];
         }
     }
@@ -219,7 +207,7 @@ static int SelectReferenceSatellite(const vector<int>& indices,const vector<sd_o
     return best; // 同高度角时保留已按sat排序的第一颗
 }
 
-// 按GPS、BDS顺序组织单差数据，卫星按内部sat编号排序，使输出顺序稳定。target_indices存非参考星下标，reference_index存该系统唯一的参考星下标。
+// 系统按GPS、BDS排列，系统内按sat排序；参考星同高度角时取排序靠前者。
 static bool BuildGroups(const vector<sd_obs_t>& sd,const rtk_model_options_t& options, vector<system_group_t>& groups,string& error)
 {
     for (int sys : { SYS_GPS, SYS_CMP })
@@ -262,9 +250,8 @@ static bool BuildGroups(const vector<sd_obs_t>& sd,const rtk_model_options_t& op
     return true;
 }
 
-// 伪距行决定三维坐标能否独立估计；相位行另含自由模糊度参数。
-// 用双差坐标系数组成三列矩阵，通过带选主元的消元检查秩是否为3。
-// 至少三个独立双差方向才能估计dX/dY/dZ；仅满足观测数量不代表几何满秩。
+// 相位行各有自由模糊度，独立的位置约束来自伪距双差。
+// 三维坐标至少需要三个独立双差方向，不能仅凭观测数量判断可解性。
 static bool HasThreeDimensionalGeometry(const vector<system_group_t>& groups,const vector<sd_obs_t>& sd)
 {
     Matrix geometry;
@@ -282,7 +269,6 @@ static bool HasThreeDimensionalGeometry(const vector<system_group_t>& groups,con
         }
     }
         
-    // 每找到一个非零主元就增加一个独立方向；容差用于排除数值近零。
     int rank = 0;
     for (int column = 0; column < 3 && rank < static_cast<int>(geometry.size()); ++column)
     {
@@ -317,7 +303,6 @@ static bool HasThreeDimensionalGeometry(const vector<system_group_t>& groups,con
     return rank == 3;
 }
 
-// 先确定每条观测的行、每个模糊度的列，再用同一映射填B和L。
 // 每个系统内的行顺序：相位f0、相位f1、伪距f0、伪距f1（单频省略f1）。
 // 列0/1/2为dX/dY/dZ；其后为GPS各频点模糊度，再为BDS各频点模糊度。
 static void BuildRowAndColumnLayout(const vector<system_group_t>& groups,const vector<sd_obs_t>& sd, int frequency_count, rtk_function_model_t& model)
@@ -326,7 +311,6 @@ static void BuildRowAndColumnLayout(const vector<system_group_t>& groups,const v
     {
         const int pair_count = static_cast<int>(group.target_indices.size());
         const int reference_sat = sd[group.reference_index].sat;
-        // 跳过前三个坐标参数，以及先前系统已经占用的模糊度列。
         const int ambiguity_start = 3 + static_cast<int>(model.ambiguities.size());
         if (group.sys == SYS_GPS)
         {
@@ -344,7 +328,6 @@ static void BuildRowAndColumnLayout(const vector<system_group_t>& groups,const v
             for (int k = 0; k < pair_count; ++k)
             {
                 dd_ambiguity_info_t ambiguity;
-                // 每个频点占pair_count列，每颗非参考星对应一个双差模糊度。
                 ambiguity.column = ambiguity_start + f * pair_count + k;
                 ambiguity.sys = group.sys;
                 ambiguity.frequency = f;
@@ -379,9 +362,7 @@ static void BuildRowAndColumnLayout(const vector<system_group_t>& groups,const v
     model.parameter_count = 3 + static_cast<int>(model.ambiguities.size());
 }
 
-// 设计矩阵B有观测数nv行、未知参数数nx列。
-// 每行前三列是双差几何距离对流动站XYZ的偏导；相位行另有一个+lambda。
-// 伪距不含模糊度，因此伪距行在第3列及其后全部为0（列号从0开始）。
+// 前三列为坐标偏导；相位模糊度以周为单位，系数为+lambda，伪距对应列为零。
 static void BuildDesignMatrix(const vector<sd_obs_t>& sd, rtk_function_model_t& model)
 {
     model.B = zeros(model.observation_count, model.parameter_count);
@@ -394,7 +375,6 @@ static void BuildDesignMatrix(const vector<sd_obs_t>& sd, rtk_function_model_t& 
                 sd[row.reference_common_index].coefficient[axis];
         }
             
-        // 相位方程含+lambda*N；其他模糊度列保持初始化的0。
         if (row.type == RtkObservationType::Phase)
         {
             model.B[r][row.ambiguity_column] = row.wavelength;
@@ -402,9 +382,7 @@ static void BuildDesignMatrix(const vector<sd_obs_t>& sd, rtk_function_model_t& 
     }
 }
 
-// L=O-C为双差观测量减双差几何距离，大小为nv×1。
-// 相位已乘波长转换为米；不扣除模糊度初值，因为未知数是绝对双差N。
-// 短基线模型只扣几何项，不在此叠加钟差、大气或无电离层组合改正。
+// L=O-C，观测和几何项均以米计；绝对双差N作为未知数，不在L中扣除初值。
 static bool BuildResidualVector(const vector<sd_obs_t>& sd, rtk_function_model_t& model)
 {
     model.L = zeros(model.observation_count, 1);
@@ -414,17 +392,14 @@ static bool BuildResidualVector(const vector<sd_obs_t>& sd, rtk_function_model_t
         const sd_obs_t& satellite = sd[row.common_index];
         const sd_obs_t& reference = sd[row.reference_common_index];
         const int f = row.frequency;
-        // 对站间单差再作星间差：目标星单差减参考星单差。
         const double observed = row.type == RtkObservationType::Phase ?
             satellite.phase[f] - reference.phase[f] : satellite.code[f] - reference.code[f];
-        // 双差几何项也使用同样顺序，保证B与L的符号约定一致。
         model.L[r][0] = observed - (satellite.geometry - reference.geometry);
         if (!isfinite(model.L[r][0])) return false;
     }
     return true;
 }
 
-// 导出前检查调用方传入的模型：维数、数值、行列映射及模糊度系数必须一致。
 // 设双差卫星对数为D、频点数为F：nv=2*F*D，nx=3+F*D。
 static bool ValidModel(const rtk_function_model_t& model)
 {
@@ -495,18 +470,14 @@ static bool ValidModel(const rtk_function_model_t& model)
     return true;
 }
 
-// 保留原四参数接口,默认双系统双频模式。
 bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],const rtk_config_t& config, rtk_function_model_t& model)
 {
     return BuildRtkFunctionModel(epoch, rover_xyz, config, rtk_model_options_t{}, model);
 }
 
-// 对外入口：epoch是任务一准备好的输入，rover_xyz是本次线性化展开点。
-// 本函数不修改输入epoch；成功返回true，失败返回false并填写model.error_message。
 bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],
     const rtk_config_t& config, const rtk_model_options_t& options, rtk_function_model_t& model)
 {
-    // 每次调用都重建模型；失败出口会清空矩阵，只留下本次错误原因。
     model = rtk_function_model_t{};
     if ((!options.use_gps && !options.use_bds) ||
         (options.frequency_count != 1 && options.frequency_count != 2) ||
@@ -530,7 +501,7 @@ bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],
         return Fail(model, "SPP/linearization coordinates are not valid");
 
     }
-    // SPP解仅是原始处理结果；RTK几何计算可独立使用数据包给出的已知基站坐标。
+    // 选择独立的几何基准，不覆盖epoch中的基站SPP结果。
     const double* base_xyz = epoch.base_spp.XYZ;
     if (options.use_known_base_xyz)
     {
@@ -557,7 +528,6 @@ bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],
 
     }
 
-    // 三维几何检查使用星对方向，不以观测条数代替几何秩。
     vector<sd_obs_t> sd;
     string error;
     if (!ComputeSingleDifference(epoch, base_xyz, rover_xyz, config, options, sd, error))
@@ -568,7 +538,6 @@ bool BuildRtkFunctionModel(const rtk_epoch_t& epoch, const double rover_xyz[3],
     if (!HasThreeDimensionalGeometry(groups, sd))
         return Fail(model, "Too few independent double differences for three coordinates");
 
-    // 行、列映射在同一次构模中生成，B/L和后续定权、估计都以此映射为准。
     model.time = epoch.time;
     model.time_diff = timediff(epoch.base_obs.data[0].time, epoch.rover_obs.data[0].time);
     model.frequency_count = options.frequency_count;

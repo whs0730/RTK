@@ -5,6 +5,8 @@
 #include <deque>
 #include <vector>
 
+static constexpr size_t MAX_PENDING_EPOCHS = 5;
+
 // 接收端状态持续更新，队列中的station_state_t则是观测报文到达时的值副本。
 // SPP先验另存于接收端，只在队列历元真正完成SPP后更新，避免接收和处理进度混淆。
 struct rtk_stream_receiver_t
@@ -39,7 +41,10 @@ static bool IsObservationNotNew(rtk_stream_receiver_t& receiver,
     const double dt = timediff(time, receiver.latest_observation);
     if (dt > 1e-9) return false;
     if (fabs(dt) <= 1e-9) ++statistics.duplicate_epochs;
-    else ++statistics.discarded_epochs;
+    else
+    {
+        ++statistics.discarded_epochs;
+    }
     return true;
 }
 
@@ -51,6 +56,8 @@ static void DecodeReceivedFrames(rtk_stream_receiver_t& receiver,
     auto& buffer = receiver.buffer;
     while (!buffer.empty())
     {
+        // 配对释放队列空间后再解码，未处理字节留在本站缓冲区。
+        if (receiver.epochs.size() >= MAX_PENDING_EPOCHS) return;
         if (receiver.remaining_skip_bytes > 0)
         {
             const size_t count = buffer.size() < receiver.remaining_skip_bytes ? buffer.size() : receiver.remaining_skip_bytes;
@@ -85,12 +92,6 @@ static void DecodeReceivedFrames(rtk_stream_receiver_t& receiver,
         const bool observation = type == ID_RANGE || type == ID_RANGECMP;
         if (!observation && type != ID_GPSEPHEM && type != ID_BDSEPHEMERIS)
         {
-            receiver.remaining_skip_bytes = frame_size;
-            continue;
-        }
-        if (frame_size > MAXRAWLEN)
-        {
-            ++statistics.decode_errors;
             receiver.remaining_skip_bytes = frame_size;
             continue;
         }
@@ -140,11 +141,6 @@ static void DecodeReceivedFrames(rtk_stream_receiver_t& receiver,
         receiver.has_observation = true;
         ++statistics.observation_epochs;
         receiver.epochs.push_back(std::move(epoch));
-        if (receiver.epochs.size() > 5)
-        {
-            receiver.epochs.pop_front();
-            ++statistics.discarded_epochs;
-        }
     }
 }
 
@@ -173,8 +169,8 @@ bool RtkStream::Open(const rtk_stream_options_t& options)
     base_first_ = true;
     base_ = make_unique<rtk_stream_receiver_t>();
     rover_ = make_unique<rtk_stream_receiver_t>();
-    base_->buffer.reserve(2 * MAXRAWLEN);
-    rover_->buffer.reserve(2 * MAXRAWLEN);
+    base_->buffer.reserve(MAXRAWLEN + OEM4RECVLEN);
+    rover_->buffer.reserve(MAXRAWLEN + OEM4RECVLEN);
     if (!base_->connection.Open(options.base_ip.c_str(), options.base_port, options.receive_timeout_ms))
     {
         error_message_ = "Base stream: " + base_->connection.LastError();
@@ -206,9 +202,11 @@ bool RtkStream::IsOpen() const
 bool RtkStream::Receive(rtk_stream_receiver_t& receiver,
     rtk_stream_receiver_statistics_t& statistics, const char* name)
 {
-    uint8_t data[MAXRAWLEN];
+    DecodeReceivedFrames(receiver, statistics);
+    uint8_t data[OEM4RECVLEN];
     // 双站轮询不沿用单站接收接口默认的980 ms休眠。
-    const int count = receiver.connection.RecvPacket(data, MAXRAWLEN, 0);
+    const int count = receiver.epochs.size() < MAX_PENDING_EPOCHS
+        ? receiver.connection.RecvPacket(data, OEM4RECVLEN, 0) : 0;
     if (count < 0)
     {
         error_message_ = string(name) + " stream: " + receiver.connection.LastError();
@@ -223,7 +221,7 @@ bool RtkStream::Receive(rtk_stream_receiver_t& receiver,
     return true;
 }
 
-bool RtkStream::PrepareCachedEpoch(rtk_epoch_t& epoch)
+RtkStreamReadResult RtkStream::PrepareCachedEpoch(rtk_epoch_t& epoch)
 {
     while (!base_->epochs.empty() && !rover_->epochs.empty())
     {
@@ -279,10 +277,10 @@ bool RtkStream::PrepareCachedEpoch(rtk_epoch_t& epoch)
             continue;
         }
         ++statistics_.prepared_epochs;
-        return true;
+        return RtkStreamReadResult::EpochReady;
     }
     epoch = rtk_epoch_t{};
-    return false;
+    return RtkStreamReadResult::Waiting;
 }
 
 RtkStreamReadResult RtkStream::ReadPreparedEpoch(rtk_epoch_t& epoch)
@@ -293,7 +291,8 @@ RtkStreamReadResult RtkStream::ReadPreparedEpoch(rtk_epoch_t& epoch)
         if (error_message_.empty()) error_message_ = "RTK stream is not open";
         return RtkStreamReadResult::Error;
     }
-    if (PrepareCachedEpoch(epoch)) return RtkStreamReadResult::EpochReady;
+    const auto prepared = PrepareCachedEpoch(epoch);
+    if (prepared != RtkStreamReadResult::Waiting) return prepared;
     // 交替先轮询的测站，避免总让同一路先等待超时；一次调用最多交付一个准备历元。
     bool ok = false;
     if (base_first_)
@@ -311,7 +310,7 @@ RtkStreamReadResult RtkStream::ReadPreparedEpoch(rtk_epoch_t& epoch)
         Close();
         return RtkStreamReadResult::Error;
     }
-    return PrepareCachedEpoch(epoch) ? RtkStreamReadResult::EpochReady : RtkStreamReadResult::Waiting;
+    return PrepareCachedEpoch(epoch);
 }
 
 const string& RtkStream::LastError() const

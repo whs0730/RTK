@@ -53,7 +53,7 @@ Matrix FactorCovariance(const Matrix& q, int n, vector<double>& scale)
     return lower;
 }
 
-// 用Q=S*lower*lower'*S解Q*x=rhs，依次缩放、前代、回代、还原尺度，避免显式求Q^-1。
+// 用Q=S*lower*lower'*S解Q*x=rhs，避免显式求Q^-1。
 // lower/scale必须来自同一次FactorCovariance，rhs的行数必须与Q一致，可同时解多列。
 Matrix SolveCovariance(const Matrix& lower, const vector<double>& scale, const Matrix& rhs)
 {
@@ -338,7 +338,7 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
                 throw runtime_error("Nonfinite float coordinates");
         vector<double> scale;
         FactorCovariance(input.covariance, nx, scale);
-        // 先保留可输出的FLOAT，后续任何搜索、Ratio或条件位置更新失败都不提交部分FIX。
+        // 先保存有效FLOAT；搜索或条件更新失败时不提交部分FIX结果。
         CopyFloatPosition(input, result);
         result.total_ambiguities = n;
         if (!isfinite(options.ratio_threshold) || options.ratio_threshold <= 1.0 || options.max_search_iterations < 1)
@@ -438,7 +438,7 @@ bool ResolveRtkAmbiguities(const rtk_solution_t& input,
         unique_ptr<BLH> blh(XYZtoBLH(base, 6378137.0, 1.0 / 298.257223563));
         unique_ptr<ENU> enu(XYZtoENU(blh.get(), baseline));
         if (!isfinite(enu->E) || !isfinite(enu->N) || !isfinite(enu->U)) throw runtime_error("Nonfinite fixed ENU");
-        // 所有固定坐标和ENU均检查完成后才覆盖FLOAT输出，跨历元滤波状态始终不在此修改。
+        // 固定坐标全部通过检查后才覆盖FLOAT输出，不修改跨历元滤波状态。
         for (int i = 0; i < 3; ++i)
         {
             result.rover_xyz[i] = fixed_rover[i];

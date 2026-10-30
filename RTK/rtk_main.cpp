@@ -21,8 +21,8 @@
 #include <windows.h>
 using namespace std;
 // 无参数运行时只读取这两个默认文件；工作目录应能解析OEM7data相对路径。
-static const char* DEFAULT_INPUT_BASE_FILE = R"(OEM7data\20240303\base.log)";
-static const char* DEFAULT_INPUT_ROVER_FILE = R"(OEM7data\20240303\rove.log)";
+static const char* DEFAULT_INPUT_BASE_FILE = R"(OEM7data\20240301\base.log)";
+static const char* DEFAULT_INPUT_ROVER_FILE = R"(OEM7data\20240301\rove.log)";
 // OEM7data/readme.txt：20240301和20240303两组算例的已知基准站ECEF坐标，单位m。
 // 换其他基站数据时修改此处；没有已知坐标则将USE_KNOWN_BASE_XYZ设为false。
 static const bool USE_KNOWN_BASE_XYZ = true;
@@ -84,7 +84,7 @@ static bool ParseCommandLine(
 		return !stream_options.base_ip.empty() && !stream_options.rover_ip.empty() &&
 			ParsePort(argv[3], stream_options.base_port) && ParsePort(argv[5], stream_options.rover_port);
 	}
-	else if (strcmp(argv[1], "--stream-rooftop") == 0)
+	if (strcmp(argv[1], "--stream-rooftop") == 0)
 	{
 		if (argc != 2 && argc != 6)
 		{
@@ -125,6 +125,134 @@ static void InitializeRooftopBase(const rtk_epoch_t& epoch, rtk_model_options_t&
 		<< options.fixed_spp_base_xyz[0] << ' ' << options.fixed_spp_base_xyz[1] << ' '
 		<< options.fixed_spp_base_xyz[2] << endl;
 	cout.precision(precision);
+}
+
+struct rtk_run_statistics_t
+{
+	int synchronized_epochs = 0;
+	int skipped_base_epochs = 0;
+	int skipped_rover_epochs = 0;
+	int both_spp_ok_epochs = 0;
+	int prepared_epochs = 0;
+	int model_epochs = 0;
+	int model_failed_epochs = 0;
+	int stochastic_epochs = 0;
+	int stochastic_failed_epochs = 0;
+	int estimation_epochs = 0;
+	int estimation_failed_epochs = 0;
+	int fixed_epochs = 0;
+	int ambiguity_failed_epochs = 0;
+};
+
+struct rtk_epoch_outputs_t
+{
+	ostream& prepared;
+	ostream& function_model;
+	ostream& stochastic_model;
+	ostream& float_text;
+	ostream& float_csv;
+	ostream& ambiguity_text;
+	ostream& solution_csv;
+};
+
+// 返回false仅表示输出失败；构模或估计失败时记录原因并跳过当前历元。
+static bool ProcessPreparedEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,
+	const rtk_model_options_t& model_options, const rtk_stochastic_options_t& stochastic_options,
+	const rtk_estimation_options_t& estimation_options, const rtk_ambiguity_options_t& ambiguity_options,
+	rtk_filter_state_t& filter, const rtk_epoch_outputs_t& outputs, rtk_run_statistics_t& statistics,
+	bool realtime)
+{
+	if (!WritePreparedEpoch(outputs.prepared, epoch))
+	{
+		cerr << "Failed to write prepared epoch at " << epoch.time.week << ' ' << epoch.time.sec << endl;
+		return false;
+	}
+	++statistics.prepared_epochs;
+
+	// 几何基站坐标由model_options选择，不覆盖两站独立SPP结果。
+	rtk_function_model_t function_model;
+	if (!BuildRtkFunctionModel(epoch, epoch.rover_spp.XYZ, config, model_options, function_model))
+	{
+		++statistics.model_failed_epochs;
+		cerr << "Function model skipped at epoch " << epoch.time.week << ' ' << epoch.time.sec
+			<< ": " << function_model.error_message << endl;
+		return true;
+	}
+	if (!WriteRtkFunctionModel(outputs.function_model, function_model))
+	{
+		cerr << "Failed to write function model at epoch " << epoch.time.week << ' ' << epoch.time.sec << endl;
+		return false;
+	}
+	++statistics.model_epochs;
+
+	rtk_stochastic_model_t stochastic_model;
+	if (!BuildRtkStochasticModel(epoch, function_model, stochastic_options, stochastic_model))
+	{
+		++statistics.stochastic_failed_epochs;
+		cerr << "Stochastic model skipped at epoch " << epoch.time.week << ' ' << epoch.time.sec
+			<< ": " << stochastic_model.error_message << endl;
+		return true;
+	}
+	if (!WriteRtkStochasticModel(outputs.stochastic_model, stochastic_model))
+	{
+		cerr << "Failed to write stochastic model at epoch " << epoch.time.week << ' ' << epoch.time.sec << endl;
+		return false;
+	}
+	++statistics.stochastic_epochs;
+
+	// 导出模型采用SPP展开点；估计器按迭代、预报和更新位置自行重建模型。
+	rtk_solution_t solution;
+	if (!EstimateRtkEpoch(epoch, config, model_options, stochastic_options, estimation_options, filter, solution))
+	{
+		++statistics.estimation_failed_epochs;
+		cerr << "RTK estimation skipped at " << epoch.time.sec << ": " << solution.error_message << endl;
+		return true;
+	}
+	if (!WriteRtkSolution(outputs.float_text, solution) || !WriteRtkSolutionCsv(outputs.float_csv, solution))
+	{
+		cerr << "Failed to write RTK float solution at " << epoch.time.sec << endl;
+		return false;
+	}
+
+	// 整数固定只改变当前输出，后续EKF继续使用浮点状态。
+	rtk_ambiguity_solution_t resolved_solution;
+	if (!ResolveRtkAmbiguities(solution, ambiguity_options, resolved_solution))
+	{
+		++statistics.ambiguity_failed_epochs;
+		cerr << "RTK ambiguity resolution retained FLOAT at " << solution.time.sec
+			<< ": " << resolved_solution.error_message << endl;
+	}
+	if (!WriteRtkAmbiguitySolution(outputs.ambiguity_text, resolved_solution) ||
+		!WriteRtkAmbiguitySolutionCsv(outputs.solution_csv, resolved_solution))
+	{
+		cerr << "Failed to write RTK ambiguity solution at " << solution.time.sec << endl;
+		return false;
+	}
+	if (resolved_solution.fixed) ++statistics.fixed_epochs;
+	++statistics.estimation_epochs;
+	if (realtime)
+	{
+		cout << "RTK " << (resolved_solution.fixed ? "FIX" : "FLOAT")
+			<< " week=" << resolved_solution.time.week << " sow=" << resolved_solution.time.sec
+			<< " ratio=" << resolved_solution.ratio << " baseline_m="
+			<< resolved_solution.baseline_xyz[0] << ' ' << resolved_solution.baseline_xyz[1]
+			<< ' ' << resolved_solution.baseline_xyz[2] << endl;
+		// 长时间运行时逐历元刷新两份结果CSV，详细矩阵文本仍由文件流缓冲。
+		outputs.float_csv.flush();
+		outputs.solution_csv.flush();
+		if (!outputs.float_csv || !outputs.solution_csv)
+		{
+			cerr << "Failed to flush realtime solution output" << endl;
+			return false;
+		}
+	}
+	else
+	{
+		cout << "RTK FLOAT week=" << solution.time.week << " sow=" << solution.time.sec
+			<< " baseline_m=" << solution.baseline_xyz[0] << ' ' << solution.baseline_xyz[1]
+			<< ' ' << solution.baseline_xyz[2] << " carried_N=" << solution.carried_ambiguities << endl;
+	}
+	return true;
 }
 
 int main(int argc,char*argv[])
@@ -169,18 +297,15 @@ int main(int argc,char*argv[])
 		return -1;
 	}
 	// 实时输出使用独立后缀；同一模式再次运行会覆盖此前同名文件。
-	const string output_suffix = rooftop ? "_realtime_rooftop" : realtime ? "_realtime" : "_3_3";
+	const string output_suffix = rooftop ? "_realtime_rooftop" : realtime ? "_realtime" : "_3_1";
 	ofstream base_obs_out("base_observations" + output_suffix + ".txt");
 	ofstream rover_obs_out("rover_observations" + output_suffix + ".txt");
 	ofstream prepared_out("rtk_prepared" + output_suffix + ".txt");
-	//任务二：输出每个有效历元的参考星、行列映射、B矩阵和L向量
 	ofstream model_out("rtk_function_model" + output_suffix + ".txt");
-	//任务三：按任务二的观测行序保存方差阵D、权阵P及定权参数
 	ofstream stochastic_out("rtk_stochastic_model_Elevation" + output_suffix + ".txt");
-	// 浮点CSV始终保留估计器输出，最终CSV另存本历元选择的FIX/FLOAT，便于对照审查。
+	// 两份CSV分别保存固定前浮点解和实际选用的FIX/FLOAT。
 	ofstream estimation_out("rtk_estimation" + output_suffix + ".txt");
 	ofstream solution_out("rtk_float" + output_suffix + ".csv");
-	//任务五：输出整数候选、Ratio与FIX/FLOAT结果。
 	ofstream ambiguity_out("rtk_ambiguity" + output_suffix + ".txt");
 	ofstream resolved_out("rtk_solution" + output_suffix + ".csv");
 	if (!base_obs_out.is_open() || !rover_obs_out.is_open() ||
@@ -193,6 +318,8 @@ int main(int argc,char*argv[])
 		if (rover_fp != nullptr) fclose(rover_fp);
 		return EXIT_FAILURE;
 	}
+	rtk_epoch_outputs_t epoch_outputs{prepared_out, model_out, stochastic_out,
+		estimation_out, solution_out, ambiguity_out, resolved_out};
 	// 文件模式由主流程持有两站状态；实时模式由RtkStream持有，避免重复分配导航缓存。
 	unique_ptr<station_state_t> base_station;
 	unique_ptr<station_state_t> rover_station;
@@ -202,7 +329,6 @@ int main(int argc,char*argv[])
 		rover_station = make_unique<station_state_t>();
 	}
 	rtk_config_t config = realtime ? stream_options.preparation : rtk_config_t{};
-	//任务二的系统/频点选项；改成1可构建双系统单频模型
 	rtk_model_options_t model_options;
 	model_options.frequency_count = 2;
 	model_options.use_known_base_xyz = realtime || USE_KNOWN_BASE_XYZ;
@@ -214,43 +340,20 @@ int main(int argc,char*argv[])
 	{
 		model_options.use_known_base_xyz = false;
 	}
-	rtk_function_model_t function_model;
-	//主流程使用高度角定权，伪距/相位方差比10000
 	rtk_stochastic_options_t stochastic_options;
 	stochastic_options.method = RtkWeightingMethod::Elevation;
-	rtk_stochastic_model_t stochastic_model;
-	//任务四默认动态EKF；LeastSquares为历元间完全独立的浮点最小二乘
+	// 默认动态EKF；LeastSquares按独立历元求浮点解。
 	rtk_estimation_options_t estimation_options;
-	// filter必须跨成功历元持有；单历元构模/估计失败时，估计器保留上一成功状态。
+	// filter跨历元保存；估计失败时保留上一成功状态。
 	rtk_filter_state_t filter;
-	rtk_solution_t solution;
 	rtk_ambiguity_options_t ambiguity_options;
-	rtk_ambiguity_solution_t resolved_solution;
 
 	bool output_failed = false;
 	bool input_failed = false;
-	//读取首个历元并且写入每个站的观测数据
 	bool has_base = !realtime && ReadAndExportNext(base_fp, *base_station, base_obs_out, output_failed);
 	bool has_rover = !realtime && ReadAndExportNext(rover_fp, *rover_station, rover_obs_out, output_failed);
-	// 计数按处理阶段区分：配对成功不等于SPP、准备、估计或固定成功。
-	int synchronized_epochs = 0;
-	//跳过的历元
-	int skipped_base_epochs = 0;
-	int skipped_rover_epochs = 0;
-	//共同历元且都有SPP解
-	int both_spp_ok_epochs = 0;
-	//共同历元且都有SPP解且筛选后依旧有效
-	int prepared_epochs = 0;
-	//任务二：成功构模并写入文件的历元，以及未能构模的历元
-	int model_epochs = 0;
-	int model_failed_epochs = 0;
-	int stochastic_epochs = 0;
-	int stochastic_failed_epochs = 0;
-	int estimation_epochs = 0;
-	int estimation_failed_epochs = 0;
-	int fixed_epochs = 0;
-	int ambiguity_failed_epochs = 0;
-	// 观测与导航结构较大，使用堆对象；本轮只有准备成功后才进入双差解算。
+	rtk_run_statistics_t run_statistics;
+	// 观测和导航结构较大，放在堆上。
 	auto rtk_epoch = make_unique<rtk_epoch_t>();
 	if (realtime)
 	{
@@ -272,10 +375,10 @@ int main(int argc,char*argv[])
 		{
 			const auto read_result = stream.ReadPreparedEpoch(*rtk_epoch);
 			const auto& statistics = stream.Statistics();
-			synchronized_epochs = static_cast<int>(statistics.synchronized_epochs);
-			skipped_base_epochs = static_cast<int>(statistics.base.discarded_epochs);
-			skipped_rover_epochs = static_cast<int>(statistics.rover.discarded_epochs);
-			both_spp_ok_epochs = static_cast<int>(statistics.synchronized_epochs - statistics.spp_failed_epochs);
+			run_statistics.synchronized_epochs = static_cast<int>(statistics.synchronized_epochs);
+			run_statistics.skipped_base_epochs = static_cast<int>(statistics.base.discarded_epochs);
+			run_statistics.skipped_rover_epochs = static_cast<int>(statistics.rover.discarded_epochs);
+			run_statistics.both_spp_ok_epochs = static_cast<int>(statistics.synchronized_epochs - statistics.spp_failed_epochs);
 			if (read_result == RtkStreamReadResult::Waiting) continue;
 			if (read_result == RtkStreamReadResult::Error)
 			{
@@ -315,10 +418,10 @@ int main(int argc,char*argv[])
 			bool rover_ok = true;
 			if (!realtime)
 			{
-				++synchronized_epochs;
+				++run_statistics.synchronized_epochs;
 				base_ok = ProcessStationEpoch(*base_station);
 				rover_ok = ProcessStationEpoch(*rover_station);
-				if (base_ok && rover_ok) ++both_spp_ok_epochs;
+				if (base_ok && rover_ok) ++run_statistics.both_spp_ok_epochs;
 				prepared_ok = base_ok && rover_ok && BuildRtkEpoch(*base_station, *rover_station, config, *rtk_epoch);
 			}
 			if (prepared_ok)
@@ -333,111 +436,11 @@ int main(int argc,char*argv[])
 					<< " BDS=" << rtk_epoch->common_bds
 					<< " total=" << rtk_epoch->ncommon
 					<< endl;
-				//把共同有效历元数据写入文件
-				if (!WritePreparedEpoch(prepared_out, *rtk_epoch))
+				if (!ProcessPreparedEpoch(*rtk_epoch, config, model_options, stochastic_options,
+					estimation_options, ambiguity_options, filter, epoch_outputs, run_statistics, realtime))
 				{
 					output_failed = true;
-					cerr << "Failed to write prepared epoch at "
-						<< rtk_epoch->time.week << ' '
-						<< rtk_epoch->time.sec << endl;
 					break;
-				}
-				prepared_epochs++;
-				//流动站用本程序SPP展开点，基站用已知坐标；epoch中的两站SPP结果不覆盖
-				if (BuildRtkFunctionModel(*rtk_epoch, rtk_epoch->rover_spp.XYZ,
-					config, model_options, function_model))
-				{
-					if (!WriteRtkFunctionModel(model_out, function_model))
-					{
-						output_failed = true;
-						cerr << "Failed to write function model at epoch "
-							<< rtk_epoch->time.week << ' ' << rtk_epoch->time.sec << endl;
-						break;
-					}
-					model_epochs++;
-					//只有任务二成功后才能构建任务三，保证历元、参考星和观测顺序一致
-					if (BuildRtkStochasticModel(*rtk_epoch, function_model,
-						stochastic_options, stochastic_model))
-					{
-						if (!WriteRtkStochasticModel(stochastic_out, stochastic_model))
-						{
-							output_failed = true;
-							cerr << "Failed to write stochastic model at epoch "
-								<< rtk_epoch->time.week << ' ' << rtk_epoch->time.sec << endl;
-							break;
-						}
-						stochastic_epochs++;
-						// 估计器在迭代/预报/更新位置处自行重建模型；上面导出的是SPP展开点的模型。
-						if (EstimateRtkEpoch(*rtk_epoch, config, model_options, stochastic_options,
-							estimation_options, filter, solution))
-						{
-							if (!WriteRtkSolution(estimation_out, solution) || !WriteRtkSolutionCsv(solution_out, solution))
-							{
-								output_failed = true;
-								cerr << "Failed to write RTK float solution at " << rtk_epoch->time.sec << endl;
-								break;
-							}
-							// 固定结果只用于当前历元输出，filter继续传递任务四的浮点状态。
-							if (!ResolveRtkAmbiguities(solution, ambiguity_options, resolved_solution))
-							{
-								++ambiguity_failed_epochs;
-								cerr << "RTK ambiguity resolution retained FLOAT at " << solution.time.sec
-									<< ": " << resolved_solution.error_message << endl;
-							}
-							if (!WriteRtkAmbiguitySolution(ambiguity_out, resolved_solution) ||
-								!WriteRtkAmbiguitySolutionCsv(resolved_out, resolved_solution))
-							{
-								output_failed = true;
-								cerr << "Failed to write RTK ambiguity solution at " << solution.time.sec << endl;
-								break;
-							}
-							if (resolved_solution.fixed) ++fixed_epochs;
-							++estimation_epochs;
-							if (realtime)
-							{
-								cout << "RTK " << (resolved_solution.fixed ? "FIX" : "FLOAT")
-									<< " week=" << resolved_solution.time.week << " sow=" << resolved_solution.time.sec
-									<< " ratio=" << resolved_solution.ratio << " baseline_m="
-									<< resolved_solution.baseline_xyz[0] << ' ' << resolved_solution.baseline_xyz[1]
-									<< ' ' << resolved_solution.baseline_xyz[2] << endl;
-								// 长时间运行时逐历元刷新两份结果CSV，详细矩阵文本仍由文件流缓冲。
-								solution_out.flush();
-								resolved_out.flush();
-								if (!solution_out || !resolved_out)
-								{
-									output_failed = true;
-									cerr << "Failed to flush realtime solution output" << endl;
-									break;
-								}
-							}
-							else
-							{
-								cout << "RTK FLOAT week=" << solution.time.week << " sow=" << solution.time.sec
-									<< " baseline_m=" << solution.baseline_xyz[0] << ' ' << solution.baseline_xyz[1]
-									<< ' ' << solution.baseline_xyz[2] << " carried_N=" << solution.carried_ambiguities << endl;
-							}
-						}
-						else
-						{
-							++estimation_failed_epochs;
-							cerr << "RTK estimation skipped at " << rtk_epoch->time.sec << ": " << solution.error_message << endl;
-						}
-					}
-					else
-					{
-						stochastic_failed_epochs++;
-						cerr << "Stochastic model skipped at epoch "
-							<< rtk_epoch->time.week << ' ' << rtk_epoch->time.sec
-							<< ": " << stochastic_model.error_message << endl;
-					}
-				}
-				else
-				{
-					//几何或观测不满足构模条件时跳过，避免输出无效/上一历元模型
-					model_failed_epochs++;
-					cerr << "Function model skipped at epoch "
-						<< rtk_epoch->time.week << ' ' << rtk_epoch->time.sec
-						<< ": " << function_model.error_message << endl;
 				}
 			}
 			if (!realtime)
@@ -450,7 +453,6 @@ int main(int argc,char*argv[])
 					<< " rover_pos=" << (rover_ok ? "OK" : "FAIL")
 					<< " rover_speed=" << (rover_station->speed_ok ? "OK" : "FAIL")
 					<< endl;
-				//读取下一历元并且写入每个站的观测数据
 				has_base = ReadAndExportNext(base_fp, *base_station, base_obs_out, output_failed);
 				has_rover = ReadAndExportNext(rover_fp, *rover_station, rover_obs_out, output_failed);
 			}
@@ -459,12 +461,11 @@ int main(int argc,char*argv[])
 		// 离线输入按时间有序，仅推进较早的一站，保留较晚一站等待下一次配对。
 		else if (result < 0)
 		{
-			skipped_base_epochs++;//跳过一个基准站历元
+			run_statistics.skipped_base_epochs++;
 			has_base = ReadAndExportNext(base_fp, *base_station, base_obs_out, output_failed);
 		}
-		//流动站历元提前
 		else {
-			skipped_rover_epochs++;
+			run_statistics.skipped_rover_epochs++;
 			has_rover = ReadAndExportNext(rover_fp, *rover_station, rover_obs_out, output_failed);
 		}
 	}
@@ -487,14 +488,12 @@ int main(int argc,char*argv[])
 		output_failed = true;
 		cerr << "Failed to close prepared epoch output after writing" << endl;
 	}
-	//关闭任务二输出，检查缓冲区最后写入是否成功
 	model_out.close();
 	if (!model_out)
 	{
 		output_failed = true;
 		cerr << "Failed to close function model output after writing" << endl;
 	}
-	//检查任务三输出缓冲区最终写入是否成功
 	stochastic_out.close();
 	if (!stochastic_out)
 	{
@@ -518,21 +517,21 @@ int main(int argc,char*argv[])
 	cout << (output_failed ? "Processing stopped: output write failed." :
 		input_failed ? "Processing stopped: realtime input failed." : "Finished.") << endl;
 	cout << "Synchronized epochs: "
-		<< synchronized_epochs << endl;
+		<< run_statistics.synchronized_epochs << endl;
 	cout << "Skipped base epochs: "
-		<< skipped_base_epochs << endl;
+		<< run_statistics.skipped_base_epochs << endl;
 	cout << "Skipped rover epochs: "
-		<< skipped_rover_epochs << endl;
-	cout << "Both SPP successful epochs: " << both_spp_ok_epochs << endl;
-	cout << "Prepared epochs: " << prepared_epochs << endl;
-	cout << "Function model epochs: " << model_epochs << endl;
-	cout << "Function model skipped epochs: " << model_failed_epochs << endl;
-	cout << "Stochastic model epochs: " << stochastic_epochs << endl;
-	cout << "Stochastic model skipped epochs: " << stochastic_failed_epochs << endl;
-	cout << "RTK float solution epochs: " << estimation_epochs << endl;
-	cout << "RTK estimation skipped epochs: " << estimation_failed_epochs << endl;
-	cout << "RTK fixed solution epochs: " << fixed_epochs << endl;
-	cout << "RTK ambiguity resolution failed epochs: " << ambiguity_failed_epochs << endl;
+		<< run_statistics.skipped_rover_epochs << endl;
+	cout << "Both SPP successful epochs: " << run_statistics.both_spp_ok_epochs << endl;
+	cout << "Prepared epochs: " << run_statistics.prepared_epochs << endl;
+	cout << "Function model epochs: " << run_statistics.model_epochs << endl;
+	cout << "Function model skipped epochs: " << run_statistics.model_failed_epochs << endl;
+	cout << "Stochastic model epochs: " << run_statistics.stochastic_epochs << endl;
+	cout << "Stochastic model skipped epochs: " << run_statistics.stochastic_failed_epochs << endl;
+	cout << "RTK float solution epochs: " << run_statistics.estimation_epochs << endl;
+	cout << "RTK estimation skipped epochs: " << run_statistics.estimation_failed_epochs << endl;
+	cout << "RTK fixed solution epochs: " << run_statistics.fixed_epochs << endl;
+	cout << "RTK ambiguity resolution failed epochs: " << run_statistics.ambiguity_failed_epochs << endl;
 	cout << "RTK ratio threshold: " << ambiguity_options.ratio_threshold << endl;
 	cout << "RTK estimator: " << (estimation_options.method == RtkEstimationMethod::ExtendedKalman ? "EKF" : "LS")
 		<< " positioning=" << (estimation_options.kinematic ? "KINEMATIC" : "STATIC") << endl;

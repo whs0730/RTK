@@ -11,11 +11,11 @@ static bool OpenSocket(SOCKET& sock, const char IP[], const unsigned short Port)
     WSADATA wsaData;                         // 保存 Winsock 初始化信息
     SOCKADDR_IN addrSrv;                     // 保存 IPv4 地址和端口
 
-    // 初始化 Winsock 1.1
-    if (!WSAStartup(MAKEWORD(1, 1), &wsaData))
+    if (!WSAStartup(MAKEWORD(2, 2), &wsaData))
     {
         // 创建 TCP 套接字
-        if ((sock = socket(AF_INET, SOCK_STREAM, 0)) != INVALID_SOCKET)
+        // 本接口只做同步轮询，不发起重叠I/O。
+        if ((sock = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, 0)) != INVALID_SOCKET)
         {
             addrSrv.sin_addr.S_un.S_addr = inet_addr(IP);   // 把字符串 IP 转成网络字节序地址
             addrSrv.sin_family = AF_INET;                  // IPv4
@@ -63,9 +63,14 @@ bool TcpOem4Stream::Open(const char* ip, unsigned short port, int recv_timeout_m
     }
     wsa_started_ = true;                                   // 标记 Winsock 已启动
 
-    // 设置套接字接收超时
-    setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO,
-        reinterpret_cast<const char*>(&recv_timeout_ms), sizeof(recv_timeout_ms));
+    u_long nonblocking = 1;
+    if (ioctlsocket(sock_, FIONBIO, &nonblocking) == SOCKET_ERROR)
+    {
+        SetLastSocketError("ioctlsocket(FIONBIO) failed");
+        Close();
+        return false;
+    }
+    receive_timeout_ms_ = recv_timeout_ms;
 
     last_error_.clear();                                   // 清除上一次错误
     return true;
@@ -94,35 +99,18 @@ bool TcpOem4Stream::ReadByte(uint8_t* data)
 
 bool TcpOem4Stream::ReadExact(uint8_t* data, int len)
 {
-    // 参数检查
     if (data == nullptr || len <= 0 || sock_ == INVALID_SOCKET) {
-        last_error_ = "stream is not open";                 // 记录错误：流未打开
+        last_error_ = "stream is not open";
         return false;
     }
 
-    int got = 0;                                            // 已读取字节数
-    while (got < len) {                                     // 循环直到读满 len 字节
-        int n = recv(sock_, reinterpret_cast<char*>(data + got), len - got, 0); // 尝试接收剩余数据
-        if (n > 0) {
-            got += n;                                     
-            continue;                                    
-        }
-
-        if (n == 0) {                                       // recv 返回 0，连接被对方关闭
-            last_error_ = "remote host closed the connection";
-            return false;
-        }
-
-        int err = WSAGetLastError();                        // 获取错误码
-        if (err == WSAEINTR || err == WSAETIMEDOUT) {        // 如果是被信号中断或超时
-            continue;                                       
-        }
-
-        last_error_ = "recv failed: " + to_string(err); //记录其他错误
-        return false;
+    int got = 0;
+    while (got < len) {
+        const int n = RecvPacket(data + got, len - got, 0);
+        if (n < 0) return false;
+        got += n;
     }
-
-    return true;                                            
+    return true;
 }
 
 
@@ -142,7 +130,22 @@ int TcpOem4Stream::RecvPacket(uint8_t* data, int max_len, int sleep_ms)
         Sleep(sleep_ms);                                    // 接收前等待
     }
 
-    int n = recv(sock_, reinterpret_cast<char*>(data), max_len, 0); // 调用一次 recv
+    fd_set readable;
+    FD_ZERO(&readable);
+    FD_SET(sock_, &readable);
+    timeval timeout{ receive_timeout_ms_ / 1000, (receive_timeout_ms_ % 1000) * 1000 };
+    // 用select等待数据；不让日常轮询触发阻塞recv的SO_RCVTIMEO。
+    const int ready = select(0, &readable, nullptr, nullptr, &timeout);
+    if (ready == 0) return 0;
+    if (ready == SOCKET_ERROR)
+    {
+        const int error = WSAGetLastError();
+        if (error == WSAEINTR) return 0;
+        last_error_ = "select failed: " + to_string(error);
+        return -1;
+    }
+
+    int n = recv(sock_, reinterpret_cast<char*>(data), max_len, 0);
     if (n > 0) {
         return n;                                           // 成功接收到数据，返回字节数
     }
@@ -153,8 +156,8 @@ int TcpOem4Stream::RecvPacket(uint8_t* data, int max_len, int sleep_ms)
     }
 
     int err = WSAGetLastError();                            // 获取错误
-    // 对于“资源暂时不可用”、“超时”、“被中断”等错误，返回 0 表示无数据
-    if (err == WSAEINTR || err == WSAETIMEDOUT || err == WSAEWOULDBLOCK) {
+    // 可读状态发生变化时非阻塞recv仍可能暂无数据，留到下次轮询。
+    if (err == WSAEINTR || err == WSAEWOULDBLOCK) {
         return 0;
     }
 
@@ -259,8 +262,8 @@ static bool TryDecodeOem4FromStreamBuff(raw_t* raw, uint8_t* Buff, int& lenD, in
 
 int input_oem4s(raw_t* raw, TcpOem4Stream* stream)
 {
-    static uint8_t buff[MAXRAWLEN];                         // 临时接收缓冲区
-    static uint8_t Buff[2 * MAXRAWLEN];                     // 拼接缓冲区
+    static uint8_t buff[OEM4RECVLEN];                        // 临时接收缓冲区
+    static uint8_t Buff[MAXRAWLEN + OEM4RECVLEN];            // 未完成帧加一次recv
     static int lenD = 0;                                    // 拼接缓冲区有效数据长度
 
     if (raw == nullptr || stream == nullptr) {               
@@ -276,7 +279,7 @@ int input_oem4s(raw_t* raw, TcpOem4Stream* stream)
     }
 
     // 缓冲区数据不够一帧，从网络接收新数据
-    lenR = stream->RecvPacket(buff, MAXRAWLEN);              // 接收一次，通常是一次轮询
+    lenR = stream->RecvPacket(buff, OEM4RECVLEN);             // 接收一次，通常是一次轮询
     if (lenR < 0) {
         return -2;                                           // 接收错误
     }
@@ -286,7 +289,7 @@ int input_oem4s(raw_t* raw, TcpOem4Stream* stream)
     }
 
     // 防止拼接缓冲区溢出
-    if ((lenD + lenR) > 2 * MAXRAWLEN) {
+    if ((lenD + lenR) > MAXRAWLEN + OEM4RECVLEN) {
         lenD = 0;                                            // 溢出则清空，重新同步
     }
 

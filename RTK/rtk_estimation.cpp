@@ -173,7 +173,6 @@ static bool ValidModels(const rtk_function_model_t& model, const rtk_stochastic_
     return true;
 }
 
-// 接收线性化参数[dXYZ,N]，统一整理绝对坐标、基线、协方差块和拟合统计。
 // EKF调用时展开点已经更新，前三项改正由调用方置零，模糊度仍是绝对双差周数。
 static void FillSolution(const rtk_function_model_t& model, const rtk_stochastic_model_t& stochastic,
     const Matrix& x, const Matrix& covariance, rtk_solution_t& solution)
@@ -370,7 +369,7 @@ static vector<rtk_phase_history_t> PhaseHistory(const rtk_epoch_t& epoch, int fr
     return history;
 }
 
-// 这里的slip表示“不能沿用旧模糊度”，也包括信号码或半周状态变化，不只物理周跳。
+// slip也包括信号码和半周状态变化，标记后不能继续沿用旧模糊度。
 // GF/MW仅在双频时可用，比较对象为上一成功滤波历元；单频依赖LLI及跟踪状态。
 static vector<vector<bool>> DetectSlips(const rtk_epoch_t& epoch,
     const vector<rtk_phase_history_t>& current, const rtk_filter_state_t& filter,
@@ -473,7 +472,6 @@ static void Predict(const rtk_epoch_t& epoch, const rtk_function_model_t& model,
     prior = zeros(nx, 1);
     covariance = zeros(nx, nx);
     vector<bool> carried(nx, false);
-    // 每行描述一个当前参数如何由旧状态组成；未传递的行保持为零，稍后独立初始化。
     if (!restart)
     {
         Matrix transform = zeros(nx, static_cast<int>(filter.x.size()));
@@ -632,7 +630,7 @@ bool EstimateRtkEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,
         // linear_prior只在模糊度分量保留预报值；新息还需扣掉lambda*N的预报贡献。
         const Matrix innovation = sub(model.L, mul(model.B, linear_prior));
         const Matrix c_ht = mul(prior_covariance, transpose(model.B));
-        // S=B*C_prior*B'+D，D是双差观测协方差；它与状态协方差C_prior的维数不同。
+        // S=B*C_prior*B'+D；D保留共享参考星产生的观测相关性。
         const Matrix s = add(mul(model.B, c_ht), stochastic.D);
         const Matrix s_inverse = CovarianceInverse(s);
         const Matrix gain = mul(c_ht, s_inverse);
@@ -644,11 +642,16 @@ bool EstimateRtkEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,
             mul(mul(gain, stochastic.D), transpose(gain)));
         Symmetrize(covariance);
         CovarianceInverse(covariance);
-        // NIS只用于诊断，此处不设置卡方门限，也不据此剔除单条观测。
+        // 用完整S保留双差相关性。25倍观测数对应整历元约5倍模型标准差，作为宽松的异常拒绝门限。
         solution.innovation_nis = mul(mul(transpose(innovation), s_inverse), innovation)[0][0];
         if (!isfinite(solution.innovation_nis) || solution.innovation_nis < -1e-8)
         {
             return Fail(solution, "Invalid EKF innovation statistic");
+        }
+        if (solution.innovation_nis > 25.0 * model.observation_count)
+        {
+            return Fail(solution, "RTK innovation rejected: NIS/observations = " +
+                to_string(solution.innovation_nis / model.observation_count) + " exceeds 25");
         }
         // 在更新后坐标处重算几何量，仅检查后验残差，不再用同一批观测做第二次量测更新。
         for (int k = 0; k < 3; ++k)
@@ -666,6 +669,12 @@ bool EstimateRtkEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,
             final_x[k][0] = 0.0;
         }
         FillSolution(model, stochastic, final_x, covariance, solution);
+        // 一次线性化可能在远离真值的SPP处通过先验检验，仍需检查更新后的非线性残差。
+        if (solution.weighted_residual_sum > 25.0 * model.observation_count)
+        {
+            return Fail(solution, "RTK posterior residual rejected: vPv/observations = " +
+                to_string(solution.weighted_residual_sum / model.observation_count) + " exceeds 25");
+        }
         solution.iterations = 1;
         rtk_filter_state_t next;
         next.initialized = true;
@@ -677,7 +686,7 @@ bool EstimateRtkEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,
         next.kinematic = options.kinematic;
         next.base_xyz_is_known = model.base_xyz_is_known;
         copy_n(model.base_xyz, 3, next.base_xyz);
-        // 全部构模、数值检查和结果整理成功后才提交；提前返回不会污染上一成功状态。
+        // 通过全部检查后才提交，失败历元保留上一成功滤波状态。
         filter = next;
         return true;
     }

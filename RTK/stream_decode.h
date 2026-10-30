@@ -16,7 +16,7 @@ class TcpOem4Stream {
 public:
     TcpOem4Stream() = default;
     ~TcpOem4Stream();
-    //用IP 和端口连接服务器，默认接收超时 5000 ms
+    // 用IP和端口连接服务器，默认等待可读数据5000 ms。
     bool Open(const char* ip, unsigned short port, int recv_timeout_ms = 5000); 
     void Close();//关闭 socket
     //读取数据
@@ -31,6 +31,7 @@ private:
 
     SOCKET sock_ = INVALID_SOCKET;//保存 socket 句柄。初值是无效 socket
     bool wsa_started_ = false;//记录 Winsock 是否已经启动
+    int receive_timeout_ms_ = 5000;
     std::string last_error_;//保存错误信息
 };
 //实时解码入口

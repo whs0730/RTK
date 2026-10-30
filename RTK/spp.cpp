@@ -1,10 +1,10 @@
-﻿#include "obs.h"
+﻿#include "spp.h"
 #include <cmath>
 #include "matrix.h"
 #include "define.h"
 #include "error_correction.h"
 // 计算双频无电离层组合伪距
-double GetPIF(obsd_t* obs,const eph_t* eph=nullptr)
+double GetPIF(obsd_t* obs,const eph_t* eph)
 {
     if (obs == nullptr)
     {
@@ -187,7 +187,7 @@ static bool PassElevationCheck(const satpos_t& sat,const double rec_xyz[3],doubl
 // 4. SNR >= 30 dB-Hz
 // 5.高度角 >= 10°
 // =====================================================
-bool PassSppBasicCheck(const obsd_t& obs,const satpos_t& sat,const eph_t* eph,const double* rec_xyz,bool check_elev,double* pif_out = nullptr)
+bool PassSppBasicCheck(const obsd_t& obs,const satpos_t& sat,const eph_t* eph,const double* rec_xyz,bool check_elev,double* pif_out)
 {
     int prn = 0;
     int sys = satsys(obs.sat, &prn);
@@ -420,7 +420,8 @@ Matrix* LeastSquares(Matrix X, obsd_t* obs, satpos_t* sat, const nav_t* nav, int
     return m;
 }
 // 迭代执行最小二乘，直到接收机位置改正量足够小或达到最大迭代次数。
-Matrix* IterativeSolution(obsd_t* obs, satpos_t* sat, const nav_t* nav, int n, int nv, SppSolveMode mode, const sol_t* init_sol, int times = 1, double Threshold = 1e-6)
+Matrix* IterativeSolution(obsd_t* obs, satpos_t* sat, const nav_t* nav, int n, int nv, SppSolveMode mode,
+    const sol_t* init_sol, std::string& error_message, int times = 1, double Threshold = 1e-6)
 {
     //先用上一历元结果设置初值。如果没有上一历元，就用全 0
     Matrix X = MakeInitialSppState(mode, init_sol);
@@ -435,6 +436,7 @@ Matrix* IterativeSolution(obsd_t* obs, satpos_t* sat, const nav_t* nav, int n, i
         m = LeastSquares(X, obs, sat, nav,n, nv, mode);
         if (m == nullptr)
         {
+            error_message = "SPP least-squares model could not be formed";
             return nullptr;
         }
         Matrix dX = sub(m[0], X);
@@ -448,7 +450,9 @@ Matrix* IterativeSolution(obsd_t* obs, satpos_t* sat, const nav_t* nav, int n, i
         X = m[0];
         times++;
     }
-    return m;
+    delete[] m;
+    error_message = "SPP least squares did not converge within the iteration limit";
+    return nullptr;
 }
 // 计算存储可用卫星的 IF 组合伪距，并统计 GPS/BDS 数量。
 void PIF(obsd_t* obs,int n,satpos_t* sat,const nav_t* nav,int* nv,double* pif,int* a = nullptr,int* b = nullptr)
@@ -491,12 +495,18 @@ void PIF(obsd_t* obs,int n,satpos_t* sat,const nav_t* nav,int* nv,double* pif,in
     if (nv) *nv = index;
 }
 // SPP 主函数：双系统估计 x/y/z/dtG/dtC，单系统估计 x/y/z/dt。
-bool SPP(obsd_t *obs, int n, const nav_t *nav, sol_t *sol, satpos_t *sat, int *nv, const sol_t* init_sol)
+bool SPP(obsd_t *obs, int n, const nav_t *nav, sol_t *sol, satpos_t *sat, int *nv, const sol_t* init_sol,
+    std::string* error_message)
 {
+    std::string unused_error;
+    std::string& error = error_message ? *error_message : unused_error;
+    error.clear();
     if (obs == nullptr || sol == nullptr || sat == nullptr || nv == nullptr)
     {
+        error = "Invalid SPP input";
         return false;
     }
+    sol->stat = 0;
     double *pif = new double[n];
     int a = 0;
     int b = 0;
@@ -520,15 +530,14 @@ bool SPP(obsd_t *obs, int n, const nav_t *nav, sol_t *sol, satpos_t *sat, int *n
     }
     else
     {
-        sol->stat = 0;
+        error = "Not enough usable GPS/BDS satellites for SPP";
         delete[] pif;
         return false;
     }
     // 迭代解算
-    Matrix *m = IterativeSolution(obs, sat, nav, n, *nv, mode, init_sol);
+    Matrix *m = IterativeSolution(obs, sat, nav, n, *nv, mode, init_sol, error);
     if (m == nullptr)
     {
-        sol->stat = 0;
         delete[] pif;
         return false;
     }
@@ -544,6 +553,14 @@ bool SPP(obsd_t *obs, int n, const nav_t *nav, sol_t *sol, satpos_t *sat, int *n
     if (*nv > nx)
     {
         sigma0 = sqrt(vtv / double(*nv - nx));//单位权中误差
+    }
+    // 30m是米级SPP的宽松粗差界；超过此值的解不再作为RTK展开点。
+    if (!std::isfinite(sigma0) || sigma0 > 30.0)
+    {
+        error = "SPP IF residual sigma exceeds 30 m: " + std::to_string(sigma0);
+        delete[] pif;
+        delete[] m;
+        return false;
     }
     Matrix Qxx = inverse(mul(transpose(B), B));//协因数阵
     Matrix Dxx = scalar_mul(sigma0*sigma0, Qxx);//方差阵

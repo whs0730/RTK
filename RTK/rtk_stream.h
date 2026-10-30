@@ -12,7 +12,7 @@ struct rtk_stream_options_t
     unsigned short base_port = 7190;
     string rover_ip = "8.148.22.229";
     unsigned short rover_port = 7201;
-    int receive_timeout_ms = 100; // 单路socket接收超时，ms；不是历元同步门限或断流判据
+    int receive_timeout_ms = 100; // 单路select等待上限，ms；超时只表示本轮没有数据
     rtk_config_t preparation;
 };
 
@@ -21,7 +21,7 @@ struct rtk_stream_receiver_statistics_t
     uint64_t received_bytes = 0;
     uint64_t observation_epochs = 0; // 完成解码并入队的新历元，不含重复、倒序和坏报文
     uint64_t duplicate_epochs = 0;
-    uint64_t discarded_epochs = 0;  // 倒序、缓存溢出或已无法配对的历元
+    uint64_t discarded_epochs = 0;  // 倒序或已无法配对的历元；满队列仅暂停读取
     uint64_t decode_errors = 0;
 };
 
@@ -44,7 +44,7 @@ enum class RtkStreamReadResult
 
 struct rtk_stream_receiver_t;
 
-// 两站各自解码RANGE/RANGECMP并缓存最近5个观测历元，配对后复用SPP与共同星历准备流程。
+// 两站各自缓存最多5个观测历元；满队列暂停本站读取，配对腾出空间后继续。
 // 基站几何坐标由主流程按数据源配置，本类保留两站独立SPP结果。
 // 单实例由同一线程调用；队列仅用于吸收两路到达时延差，不外推、插值或补齐缺失观测。
 class RtkStream
@@ -70,7 +70,7 @@ public:
 
 private:
     bool Receive(rtk_stream_receiver_t& receiver, rtk_stream_receiver_statistics_t& statistics, const char* name);
-    bool PrepareCachedEpoch(rtk_epoch_t& epoch);
+    RtkStreamReadResult PrepareCachedEpoch(rtk_epoch_t& epoch);
 
     unique_ptr<rtk_stream_receiver_t> base_;
     unique_ptr<rtk_stream_receiver_t> rover_;

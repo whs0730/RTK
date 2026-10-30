@@ -90,6 +90,7 @@ bool SolveRtkLeastSquares(const rtk_function_model_t& function_model,
 // LS每次更新展开点后重建B/L；EKF在预报位置处线性化，并传递双差状态及完整协方差。
 // EKF要求时刻严格递增；filter由调用方跨历元持有，LS分支不读写其中的历史状态。
 // 输入历元、两站SPP均不修改；失败时solution清空，filter保留上一成功历元。
+// EKF拒绝NIS/nv或更新后v'Pv/nv超过25的历元，不提交滤波状态。
 // 动态EKF不含速度状态：每历元用SPP重置位置先验，仅连续传递可映射的模糊度。
 // 两种估计方式均输出浮点解；模糊度固定在独立模块完成，不反馈到此处的filter。
 bool EstimateRtkEpoch(const rtk_epoch_t& epoch, const rtk_config_t& config,

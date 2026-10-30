@@ -12,7 +12,7 @@ static bool SameObservationBlock(const dd_row_info_t &first, const dd_row_info_t
 
 static bool Fail(rtk_stochastic_model_t &model, const string &message)
 {
-    // 失败时清空矩阵和映射，仅保留诊断信息，防止继续使用上一历元的结果。
+    // 清空失败模型，避免调用方沿用上一历元的矩阵和行映射。
     model = rtk_stochastic_model_t{};
     model.error_message = message;
     return false;
@@ -49,7 +49,6 @@ static bool ValidOptions(const rtk_stochastic_options_t &options)
     return options.elevation_a_m > 0.0 || options.elevation_b_m > 0.0;
 }
 
-// 一条观测只需确认系统、频点和类型；构模与导出共用这三个判断。
 static bool ValidObservationInfo(const dd_row_info_t &row, int frequency_count)
 {
     if (row.sys != SYS_GPS && row.sys != SYS_CMP)
@@ -82,7 +81,7 @@ static bool SingleDifferenceVariance(const common_sat_t &sat, RtkObservationType
         for (int station = 0; station < 2; ++station)
         {
             double elevation = elevations[station];
-            // 防止角度单位错误、零高度角除零或无效高度角进入模型。
+            // 高度角使用弧度，零高度角会使定权公式除零。
             if (!isfinite(elevation) || elevation <= 0.0 || elevation > PI / 2.0)
             {
                 return false;
@@ -100,11 +99,9 @@ static bool SingleDifferenceVariance(const common_sat_t &sat, RtkObservationType
     return Positive(variance);
 }
 
-// 导出前检查维数和数值，拒绝失败结果、残缺矩阵及不匹配的行信息。
 static bool ValidOutput(const rtk_stochastic_model_t &model)
 {
     const int n = model.observation_count;
-    // 先检查基本状态，再检查后面需要访问的数组长度。
     if (!model.error_message.empty())
     {
         return false;
@@ -174,8 +171,7 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
 bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_t &function_model,
                              const rtk_stochastic_options_t &options, rtk_stochastic_model_t &model)
 {
-    // 只检查定权使用的配置、行映射和历元。
-    // B、L的维数与数值、参数个数等由任务二负责，这里不再重复检查。
+    // B/L由函数模型负责；定权只使用其历元和行映射。
     model = rtk_stochastic_model_t{};
     if (!ValidOptions(options))
     {
@@ -209,7 +205,7 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
         return Fail(model, "任务二模型与输入共视数据不属于同一历元");
     }
 
-    // 沿用函数模型的行映射，方差数组与B/L同序，不另行筛星或选择参考星。
+    // 方差数组沿用B/L的行序，不重新筛星或选择参考星。
     model.target_sd_variance.resize(n);
     model.reference_sd_variance.resize(n);
     for (int i = 0; i < n; ++i)
@@ -220,7 +216,6 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
             return Fail(model, "观测行的系统、频点或类型无效");
         }
 
-        // 必须先确认下标有效，才能读取共视卫星数组。
         if (row.common_index < 0 || row.common_index >= epoch.ncommon)
         {
             return Fail(model, "目标星共视下标越界");
@@ -250,7 +245,6 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
         {
             return Fail(model, "目标星与参考星必须属于当前系统");
         }
-        // 与前面的行逐一比较，检查重复观测以及同一块是否使用了同一参考星下标。
         for (int j = 0; j < i; ++j)
         {
             const dd_row_info_t &previous = function_model.rows[j];
@@ -274,9 +268,8 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
         }
     }
 
-    // 将每个块的协方差填入D的原行号，跨块元素保持零。
+    // 保留原行号填入相关块，跨块元素保持零。
     model.D = zeros(n, n);
-    // processed记录哪些行已完成；用普通循环收集同一块的原行号。
     vector<int> processed(n, 0);
     for (int first = 0; first < n; ++first)
     {
@@ -295,9 +288,7 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
         }
         int block_size = static_cast<int>(indices.size());
         const double reference_variance = model.reference_sd_variance[indices[0]];
-        // 一个块：D = diag(v_目标星) + v_参考星 * 1*1ᵀ。
-        // 对角元素为目标星与参考星单差方差之和，非对角元素为参考星单差方差。
-        // 两条双差均以相同符号减去参考星，故共享误差项产生正协方差。
+        // D块=diag(v_target)+v_reference*1*1'；共同减去参考星产生正协方差。
         for (int a = 0; a < block_size; ++a)
         {
             int i = indices[a];
@@ -313,8 +304,7 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
         }
     }
 
-    // 对完整D求逆得到P，保留共享参考星引入的非对角项，不能只倒置对角元素。
-    // inverse()在矩阵奇异等情况下会抛出异常，这里转换为构模失败信息。
+    // 求逆必须保留非对角项；奇异矩阵按构模失败处理。
     try
     {
         model.P = inverse(model.D);
@@ -350,7 +340,6 @@ bool BuildRtkStochasticModel(const rtk_epoch_t &epoch, const rtk_function_model_
         }
     }
 
-    // 全局矩阵始终按任务二原行号填入；即使行序被交错排列，也无需重新排B和L。
     model.time = function_model.time;
     model.observation_count = n;
     model.frequency_count = function_model.frequency_count;

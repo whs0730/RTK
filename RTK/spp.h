@@ -9,8 +9,9 @@ const eph_t* GetSppEph(const nav_t* nav, int sat);
 // SPP筛选：系统、星历、伪距、卫星位置、信噪比、高度角。
 bool PassSppBasicCheck(const obsd_t& obs,const satpos_t& sat,const eph_t* eph,const double* rec_xyz,bool check_elev,double* pif_out = nullptr);
 
-// 单点定位主入口，输出接收机坐标、钟差、PDOP 和单位权中误差。
-bool SPP(obsd_t* obs,int n,const nav_t* nav,sol_t* sol,satpos_t* sat,int* nv,const sol_t* init_sol = nullptr);
+// 未收敛或IF单位权中误差超过30m时返回false、stat=0；可选error_message说明失败原因。
+bool SPP(obsd_t* obs,int n,const nav_t* nav,sol_t* sol,satpos_t* sat,int* nv,const sol_t* init_sol = nullptr,
+    std::string* error_message = nullptr);
 
 // 单点测速主入口，使用多普勒观测估计接收机速度和钟速。
 bool SPP_Speed(obsd_t* obs,int n,sol_t* sol,satpos_t* sat,solvel_t* vsol,int* nv);

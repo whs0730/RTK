@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <iomanip>
+#include <iostream>
 #include <memory>
 using namespace std;
 bool ReadNextObservationEpoch(FILE* fp, station_state_t& station)
@@ -21,22 +22,10 @@ bool ReadNextObservationEpoch(FILE* fp, station_state_t& station)
 			station.eof = true;
 			return false;
 		}
-		//报文错误，例如CRC错误，跳过后继续读取
-		if (ret < 0)
+		if (ret != 1 || station.raw.obs.n <= 0)
 		{
 			continue;
 		}
-		//ret==2表明星历已更新，ret==0无用报文
-		if (ret != 1)
-		{
-			continue;
-		}
-		// 解码成功但没有观测时继续读；SPP所需的卫星数量在处理阶段检查。
-		if (station.raw.obs.n <= 0)
-		{
-			continue;
-		}
-		//清空上一历元处理结果
 		memset(station.sats, 0, sizeof(station.sats));
 		station.spp_sol = sol_t();
 		station.speed_sol = solvel_t();
@@ -46,7 +35,6 @@ bool ReadNextObservationEpoch(FILE* fp, station_state_t& station)
 		return true;
 	}
 }
-//比较基准站和流动站的历元时间
 int CompareStationEpochTime(const station_state_t& base,
 	const station_state_t& rover,
 	const rtk_config_t& config,
@@ -67,13 +55,12 @@ int CompareStationEpochTime(const station_state_t& base,
 	}
 	if (dt < 0.0)
 	{
-		return -1;//基准站较早
+		return -1;
 	}
-	return 1;//流动站较早
+	return 1;
 }
 bool ProcessStationEpoch(station_state_t& station) {
 	obs_t& obs = station.raw.obs;
-	//清空上一历元处理结果
 	memset(station.sats, 0, sizeof(station.sats));
 	station.spp_sol = sol_t();
 	station.speed_sol = solvel_t();
@@ -85,36 +72,26 @@ bool ProcessStationEpoch(station_state_t& station) {
 		return false;
 	}
 	station.valid_sat = CaculateSatellitePositions(obs.data, obs.n, &station.raw.nav, station.sats);
-	//spp至少四颗星
 	if (station.valid_sat < 4)
 	{
 		return false;
 	}
-	// 前一成功历元只提供迭代初值，不把其位置当成本历元有效解。
 	int position_nv = 0;
-	const sol_t* initial_solution = nullptr;
-	if (station.has_last_spp)
+	string position_error;
+	station.position_ok = SPP(obs.data, obs.n, &station.raw.nav, &station.spp_sol, station.sats, &position_nv,
+		station.has_last_spp ? &station.last_spp_sol : nullptr, &position_error);
+	if (!station.position_ok)
 	{
-		initial_solution = &station.last_spp_sol;
-	}
-	station.position_ok = SPP(obs.data, obs.n, &station.raw.nav, &station.spp_sol, station.sats, &position_nv, initial_solution);
-	if (!station.position_ok || station.spp_sol.stat != 1)
-	{
-		station.spp_sol.stat = 0;
+		cerr << "SPP skipped at " << obs.data[0].time.week << ' ' << obs.data[0].time.sec
+			<< ": " << position_error << endl;
 		return false;
 	}
-	//保存位置的成功解，作为下一历元的初值
 	station.last_spp_sol = station.spp_sol;
 	station.has_last_spp = true;
 	// RTK几何依赖位置，不依赖多普勒速度，因此速度失败不否定本历元位置。
 	int speed_nv = 0;
 	station.speed_ok = SPP_Speed(obs.data, obs.n, &station.spp_sol, station.sats, &station.speed_sol, &speed_nv);
-	if (!station.speed_ok || station.speed_sol.stat != 1)
-	{
-		station.speed_ok = false;
-		station.speed_sol.stat = 0;
-	}
-	return true;//计算出位置就返回成功
+	return true;
 }
 
 // 视线由接收机指向卫星；WGS-84大地坐标用于转到测站局部水平系，输出为rad。
@@ -154,7 +131,6 @@ bool PassRtkObservationCheck(
 	double rover_azel[2]
 )
 {
-	// common保留原始观测下标，位置与卫星编号都有效后才能用于双差几何。
 	if (base_sol.stat != 1 || rover_sol.stat != 1)
 	{
 		return false;
@@ -165,32 +141,26 @@ bool PassRtkObservationCheck(
 		return false;
 	}
 
-	// sats[i] 必须对应 obs.data[i]
 	if (base_sat.sat != base_obs.sat || rover_sat.sat != rover_obs.sat)
 	{
 		return false;
 
 	}
-	//历元时间对准
 	if (fabs(timediff(base_obs.time, rover_obs.time)) >= config.sync_tolerance)
 	{
 		return false;
 	}
-	//获得卫星系统类型和prn
-	int prn = 0;
-	int sys = satsys(base_obs.sat, &prn);
+	const int sys = satsys(base_obs.sat, nullptr);
 	if (sys != SYS_GPS && sys != SYS_CMP)
 		return false;
 
 	
 	for (int f = 0; f < 2; ++f)
 	{
-		//频点观测码有效且应相同
 		if (base_obs.code[f] == CODE_NONE || base_obs.code[f] != rover_obs.code[f])
 		{
 			return false;
 		}
-		//伪距和载波应有效
 		if (!std::isfinite(base_obs.P[f]) || base_obs.P[f] <= 0.0 ||
 			!std::isfinite(rover_obs.P[f]) || rover_obs.P[f] <= 0.0 ||
 			!std::isfinite(base_obs.L[f]) || base_obs.L[f] == 0.0 ||
@@ -199,7 +169,6 @@ bool PassRtkObservationCheck(
 			return false;
 		}
 
-		// 信噪比大于 30 dB-Hz
 		if (base_obs.SNR[f] <= config.snr_mask ||
 			rover_obs.SNR[f] <= config.snr_mask)
 			return false;
@@ -209,12 +178,10 @@ bool PassRtkObservationCheck(
 	{
 		return false;
 	}
-	//两站观测卫星的高度角和方位角应有效
 	if (!CalculateAzel(base_sol, base_sat, base_azel) || !CalculateAzel(rover_sol, rover_sat, rover_azel))
 	{
 		return false;
 	}
-	//最后满足高度角限制
 	const double mask_rad = config.elevation_mask * PI / 180.0;
 	return base_azel[1] >= mask_rad &&rover_azel[1] >= mask_rad;
 }
@@ -255,7 +222,6 @@ bool BuildRtkEpoch(const station_state_t& base,const station_state_t& rover,cons
 	const gtime_t base_time = base.raw.obs.data[0].time;
 	const gtime_t rover_time = rover.raw.obs.data[0].time;
 	const double dt = timediff(base_time, rover_time);
-	//时间对准
 	if (fabs(dt) >= config.sync_tolerance)
 	{
 		return false;
@@ -269,11 +235,8 @@ bool BuildRtkEpoch(const station_state_t& base,const station_state_t& rover,cons
 	epoch.base_spp = base.spp_sol;
 	epoch.rover_spp = rover.spp_sol;
 
-	// 用卫星编号查流动站下标
 	int rover_index[MAXSAT + 1];
-	for (int i = 0; i < MAXSAT + 1; i++) {
-		rover_index[i] = -1;
-	}
+	fill_n(rover_index, MAXSAT + 1, -1);
 
 	for (int j = 0; j < rover.raw.obs.n; ++j)
 	{
@@ -315,7 +278,6 @@ bool BuildRtkEpoch(const station_state_t& base,const station_state_t& rover,cons
 
 		double base_azel[2] = {};
 		double rover_azel[2] = {};
-		//筛选是否可用
 		if (!PassRtkObservationCheck(
 			base.raw.obs.data[i], rover.raw.obs.data[j],
 			base_sats[i], rover_sats[j],
@@ -337,15 +299,13 @@ bool BuildRtkEpoch(const station_state_t& base,const station_state_t& rover,cons
 		item.rover_azel[0] = rover_azel[0];
 		item.rover_azel[1] = rover_azel[1];
 
-		int prn = 0;
-		int sys = satsys(sat, &prn);
+		const int sys = satsys(sat, nullptr);
 		if (sys == SYS_GPS) ++epoch.common_gps;
 		if (sys == SYS_CMP) ++epoch.common_bds;
 	}
 
 	return epoch.ncommon > 0;
 }
-// 保存一个已完成数据准备的同步历元
 bool WritePreparedEpoch(ostream& out,const rtk_epoch_t& epoch)
 {
 	if (!out ||
@@ -359,7 +319,6 @@ bool WritePreparedEpoch(ostream& out,const rtk_epoch_t& epoch)
 		return false;
 	}
 
-	// 写入前检查下标
 	for (int k = 0; k < epoch.ncommon; ++k)
 	{
 		const common_sat_t& item = epoch.common[k];

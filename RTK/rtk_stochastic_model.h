@@ -3,7 +3,7 @@
 #include "rtk_mathematical_model.h"
 #include <ostream>
 
-// 任务三的非差定权方法。两站、不同卫星、频点和观测类型的非差误差假定独立。
+// 两站、不同卫星、频点和观测类型的非差误差假定独立。
 // 双差之间仍然相关：同一块的双差共用了参考星的站间单差。
 enum class RtkWeightingMethod
 {
@@ -32,16 +32,16 @@ struct rtk_stochastic_model_t
     Matrix D;  // 双差观测方差协方差阵，m²；供滤波量测更新使用
     Matrix P;  // D的逆，m⁻²；供加权最小二乘使用，不能逐元素取倒数
 
-    // 与任务二B、L完全同序；保存单差方差，便于逐行检查双差协方差的来源。
+    // 与函数模型B/L同序；两组单差方差用于构建各相关块。
     vector<dd_row_info_t> rows;
     vector<double> target_sd_variance;
     vector<double> reference_sd_variance;
     string error_message;  // 失败时D、P及行映射清空，只保留错误原因
 };
 
-// 不重新筛星、不重新选参考星、不修改输入。相位已经按米定权，不再乘波长平方。
-// 默认等方差，伪距/相位方差比为10000；矩阵维数取任务二观测数，而非参数数。
-// 调用者应先完成任务二构模；这里只使用行映射等信息，不重复校验B、L及参数个数。
+// 沿用函数模型的筛星结果、参考星和行序；相位按米定权，不再乘波长平方。
+// 默认等方差，伪距/相位方差比为10000；矩阵维数为观测数。
+// 调用前应完成函数模型构建；B/L及参数个数由函数模型负责校验。
 // 每块D=diag(v_target)+v_reference*1*1'，v是两站非差方差之和；跨块置零。
 // 等方差相位块的双差对角为4*sigma²、非对角为2*sigma²；伪距块再乘方差比。
 bool BuildRtkStochasticModel(

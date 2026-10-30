@@ -26,7 +26,7 @@ struct rtk_model_options_t
     double fixed_spp_base_xyz[3]{}; // ECEF XYZ，单位m；固定的SPP概略值，不作为精确真值标记
 };
 
-// 记录B和L中每一行对应哪条双差观测
+// B/L的行映射；共视下标指向epoch.common，不是卫星编号。
 struct dd_row_info_t
 {
     int sys = SYS_NONE;
@@ -86,7 +86,7 @@ struct rtk_function_model_t
 // 各站使用epoch.common中各自的卫星位置；输入epoch不被修改。
 // 基站几何坐标由options选择；流动站展开点始终使用调用者传入的rover_xyz。
 // 行序：GPS相位f0/f1、GPS伪距f0/f1，再BDS相位f0/f1、BDS伪距f0/f1。
-// 每块按sat排序；单频时省去f1。默认保留双系统双频接口。
+// 每块按sat排序；默认GPS/BDS双系统双频，单频时省去f1。
 bool BuildRtkFunctionModel(
     const rtk_epoch_t& epoch,
     const double rover_xyz[3],
@@ -95,7 +95,7 @@ bool BuildRtkFunctionModel(
 );
 
 // 可选择单/双系统和单/双频；在输入epoch已有共视集合中重新检查所选频点。
-// 任务一未保存到common的卫星不会由此接口自动恢复。
+// 准备阶段未保存到common的卫星不会由此接口恢复。
 bool BuildRtkFunctionModel(
     const rtk_epoch_t& epoch,
     const double rover_xyz[3],
