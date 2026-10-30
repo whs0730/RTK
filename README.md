@@ -1,245 +1,93 @@
-# RTK 定位程序——卫星导航算法与程序设计 II
+# RTK 定位程序
 
-本工程用于本学期（2026 年秋季）的 RTK 编程实习，在上学期 GPS/BDS 双频 SPP 定位与测速程序的基础上，逐步实现双站数据准备、双差函数模型、随机模型、参数估计和整周模糊度固定。
+基于 C++ 的 GPS/BDS 短基线 RTK 程序，支持 NovAtel OEM 二进制文件和双站 TCP 数据流。提供单历元最小二乘、逐历元 EKF 和 LAMBDA 整周模糊度固定，默认使用动态 EKF。
 
-课程目标是处理 NovAtel OEM719 两站观测数据，实现零基线、短基线的静态或动态 RTK 定位，最终获得厘米级固定解。**当前代码已接入任务 1–4，支持单历元最小二乘和逐历元 EKF 浮点解；主流程默认动态 EKF。模糊度固定尚未实现。**
+## 主要功能
 
-## 本学期实习任务与当前进度
+- 两站独立解码与 SPP、历元同步、共同星历选择和共视卫星筛选。
+- GPS、BDS 或双系统的单频/双频双差非组合模型。
+- 等方差及高度角定权，保留共享参考星引入的双差相关性。
+- EKF 参考星变换、卫星增减、LLI/GF/MW 周跳检测与模糊度重置。
+- LAMBDA 候选搜索、Ratio 检验和固定后位置更新；未固定时保留有效浮点解。
 
-任务要求依据同级 `课件/` 目录中的实习任务 1–5；下表中的实现进度以当前源码为准。
+## 编译
 
-| 实习任务 | 课程要求 | 当前实现 |
-| --- | --- | --- |
-| 任务 1：RTK 解算所需数据准备 | 两站原始数据读取与解码、观测时间同步、分别 SPP、共视卫星筛选及历元数据保存 | 已接入离线主流程；双站实时输入与缓存同步待实现 |
-| 任务 2：RTK 函数模型建立 | 短基线双差非组合模型，建立 `B`、`L`，输出观测数与参数数；必须支持双系统单频，尽量支持其他系统/频点组合 | 已接入 `rtk_mathematical_model.cpp/.h`，支持 GPS、BDS、GPS+BDS 的单频/双频组合；主流程默认双系统双频 |
-| 任务 3：RTK 随机模型建立 | 根据非差→单差→双差的协方差传播构建方差阵和权阵，保留共享参考星带来的相关性，与函数模型行序对应 | 已接入 `rtk_stochastic_model.cpp/.h`，支持等方差和高度角定权，导出 `D`、`P` 和行映射 |
-| 任务 4：参数估计 | 单历元最小二乘实数解；课件指定逐历元扩展 Kalman 滤波，以及参考星变换、卫星增减和周跳处理 | 已接入 `rtk_estimation.cpp/.h`：迭代最小二乘、动态/静态 EKF、完整双差状态与协方差变换、周跳后重置 |
-| 任务 5：模糊度固定 | 将浮点模糊度及其协方差送入 LAMBDA，进行 Ratio 检验，固定成功后更新位置，否则保留浮点解 | 待实现 |
+环境为 Windows、MSVC `v145`、C++20 和 Windows SDK，工程已配置 UTF-8 编译。
 
-任务 3 默认伪距与相位方差比采用课件建议的 `10000:1`。任务 4 给出的方差比范围为 `(10000～40000):1`；任务 5 的 Ratio 阈值示例为 `2.0`，模糊度固定尚未实现。
-
-## 当前处理流程
-
-```text
-分别读取基准站和流动站 OEM 二进制文件
--> 各站独立解码观测值与广播星历
--> 根据 GPST 观测时标同步两站历元
--> 各站计算卫星状态并分别进行 SPP、多普勒测速
--> 按卫星编号匹配并筛选共视卫星
--> 保存同步历元、两站观测值、概略位置和各自卫星状态
--> GPS/BDS 分别选择参考星
--> 构建双差函数模型 B、L 及行列映射
--> 构建双差观测方差阵 D 和权阵 P
--> 输出任务 1、任务 2、任务 3 检查文件
--> 参数估计，输出 RTK 浮点基线、模糊度、协方差和残差
-```
-
-两站 SPP 提供概略坐标，独立保留；任务四输出为 `FLOAT`。LAMBDA、Ratio 检验和固定后位置更新属于任务五，尚未接入。
-
-## 目录结构
-
-```text
-RTK/
-  README.md
-  RTK.slnx                         Visual Studio 解决方案
-  RTK/
-    RTK.vcxproj / .filters         工程与文件分组
-    rtk_main.cpp                   当前离线双站入口，串联任务 1–3
-    rtk_prepare.h / .cpp           双站状态、历元同步、SPP、共视筛选与导出
-    rtk_mathematical_model.h / .cpp 双差函数模型、参考星选择和 B/L 导出
-    rtk_stochastic_model.h / .cpp   等方差/高度角定权、双差协方差和权阵导出
-    rtk_estimation.h / .cpp         最小二乘/EKF浮点解、状态变换、周跳重置和结果导出
-    station_satpos.h / .cpp        单站观测对应的卫星状态计算
-    spp.h / .cpp                   保留的 SPP 定位与多普勒测速模块
-    spp_main.cpp                   上学期单站离线/实时 SPP 入口
-    obs.h / .cpp                   观测、星历、卫星状态及结果结构体
-    decode.h / .cpp                NovAtel OEM 二进制解码
-    stream_decode.h / .cpp         原单站 TCP 流读取模块
-    satpos.h / .cpp                GPS/BDS 广播星历计算
-    timeTransform.h / .cpp         时间系统转换
-    coordinate.h / .cpp            XYZ、BLH、ENU 与方位角/高度角计算
-    error_correction.h / .cpp      SPP 使用的误差改正
-    matrix.h / .cpp                矩阵运算
-    OEM7data/                      本地课程数据及参考结果
-  tests/
-    README.md                      任务 2 验证方法
-    rtk_model_tests.cpp            独立函数模型测试入口
-    compare_rtk_info.py            与课程 RTKInfo 参考文件的比较脚本
-```
-
-`spp.cpp/.h` 继续负责单点定位；本学期新增的 RTK 功能位于 `rtk_prepare`、`rtk_mathematical_model` 等模块中。`OEM7data/`、编译产物和大部分运行输出由 `.gitignore` 忽略，复制或克隆源码后需要另行准备课程数据。
-
-## 编译方法
-
-1. 使用支持 `.slnx` 的 Visual Studio 打开根目录下的 `RTK.slnx`。
+1. 用 Visual Studio 打开 [RTK.slnx](RTK.slnx)，或直接打开 [RTK.vcxproj](RTK/RTK.vcxproj)。
 2. 选择 **Debug / x64**，生成解决方案。
-3. 从工程根目录运行时，可执行文件路径为 `x64\Debug\RTK.exe`。
+3. 可执行文件位于 `x64\Debug\RTK.exe`。
 
-工程当前使用 `v145` 工具集、C++20 和 UTF-8 编译选项。若本机缺少对应工具集，需要安装该工具集或按本机环境重定向工程；若 IDE 不支持 `.slnx`，可直接打开 `RTK\RTK.vcxproj`。
+Debug / x64 已启用 `rtk_main.cpp` 并排除旧的 `spp_main.cpp`。使用其他配置时，应确认只编译一个 `main()`。
 
-**当前明确配置入口排除规则的是 Debug / x64：启用 `rtk_main.cpp`，排除 `spp_main.cpp`。** 切换到其他配置前，应检查两个入口文件的“从生成中排除”设置，保证仅编译一个 `main()`。
+## 运行
 
-## 数据说明
+以下命令从仓库根目录开始。输入数据和输出文件使用相对路径，均以进程的工作目录为准。
 
-两组数据均位于 `RTK/OEM7data/`，每组包含 `base.log`、`rove.log`、`RINEX/` 和 `res/`。
-
-| 数据目录 | 基线类型 | 用途 |
-| --- | --- | --- |
-| `20240301/` | 零基线 | 优先检查解码、同步、共视筛选和模型构建 |
-| `20240303/` | 短基线 | 零基线检查通过后，验证短基线处理 |
-
-按数据包的 `readme.txt`，两组基准站参考 ECEF 坐标均为 `(-2267808.6227, 5009324.7699, 3221016.8928) m`；短基线给出的 XYZ 分量为 `(-1.398, 2.575, -4.920) m`，ENU 分量为 `(0.211, -5.723, 0.018) m`。
-
-课件指定接收机为 OEM719，数据包说明标注采集设备为 OEM729，数据均为 NovAtel OEM 格式。主流程现通过 `rtk_model_options_t` 为函数模型传入上述已知基准站坐标；两站 SPP 结果仍原样保存，流动站线性化展开点仍使用本程序的 SPP 坐标。
-
-`rtk_main.cpp` 中的 `USE_KNOWN_BASE_XYZ` 和 `KNOWN_BASE_XYZ` 控制基站几何坐标。换其他基站数据时必须修改已知坐标；没有已知坐标可将开关设为 `false`，恢复原先的 SPP 概略坐标方式。函数模型输出的 `BASE_POSITION_SOURCE` 标明 `KNOWN` 或 `SPP`。这不会自动统一卫星筛选，也不会使用参考文件中的流动站 SPP 初值，因此 `L` 不应要求与 `RTKInfo.txt` 逐项完全相等。
-
-## 运行方法
-
-以下 PowerShell 命令均从工程根目录开始，使用新编译的 Debug / x64 程序。
-
-### 默认零基线数据
+### 离线文件
 
 ```powershell
 Set-Location .\RTK
 ..\x64\Debug\RTK.exe
 ```
 
-不传参数时，程序读取当前工作目录下的：
+当前默认读取 `RTK/OEM7data/20240301/` 下的 `base.log`、`rove.log`。数据未随仓库提交，需要自行准备。
 
-```text
-OEM7data\20240301\base.log
-OEM7data\20240301\rove.log
-```
+切换数据时，修改 `rtk_main.cpp` 中的 `DEFAULT_INPUT_BASE_FILE`、`DEFAULT_INPUT_ROVER_FILE`，并检查基站坐标与输出后缀，然后重新编译。当前入口不接受命令行文件路径参数。
 
-### 显式指定两站文件
-
-在工程根目录运行零基线数据：
+### 双站实时流
 
 ```powershell
-.\x64\Debug\RTK.exe .\RTK\OEM7data\20240301\base.log .\RTK\OEM7data\20240301\rove.log
+.\x64\Debug\RTK.exe --stream
+.\x64\Debug\RTK.exe --stream-rooftop
 ```
 
-运行短基线数据：
+`--stream` 默认使用 RTS1 两路数据流及其已知基站坐标；`--stream-rooftop` 使用楼顶两路数据流，并将首次有效基站 SPP 坐标固定为本次运行的概略基准。
 
-```powershell
-.\x64\Debug\RTK.exe .\RTK\OEM7data\20240303\base.log .\RTK\OEM7data\20240303\rove.log
-```
-
-参数顺序为 **基准站文件、流动站文件**。需要同时提供两个路径；只传一个路径时，当前程序仍使用两站默认文件。相对输入路径和输出文件都以进程的当前工作目录为基准，在 Visual Studio 中调试时也应检查“工作目录”和“命令参数”。
-
-当前 `rtk_main.cpp` 仅实现双站离线文件处理，没有可用的双站 `--stream` 模式。原单站实时 SPP 代码仍保留在 `spp_main.cpp` 和 `stream_decode.cpp`，不能直接作为双站实时 RTK 的使用方法。
-
-## 任务 1：双站数据准备
-
-`station_state_t` 为每个测站分别保存解码状态、观测值、星历、卫星状态与 SPP 结果；`rtk_epoch_t` 保存同步后的两站数据及共视卫星集合。
-
-当前质量控制参数由 `rtk_config_t` 定义：
-
-| 项目 | 默认要求 |
-| --- | --- |
-| 时间同步 | `abs(t_base - t_rover) < 0.001 s` |
-| 截止高度角 | 两站均不低于 `10°` |
-| 信噪比 | 两站两个频点均严格大于 `30 dB-Hz` |
-| 观测值 | 两站双频伪距和载波相位有效、观测码匹配 |
-| 系统与频率 | GPS L1/L2，BDS B1I/B3I |
-
-时间不匹配时推进较早的一站；两站 SPP 均成功后，按内部卫星编号匹配共视卫星，不依赖两站观测数组的排序相同。两站分别保存并使用自己的卫星位置、钟差、方位角和高度角。
-
-LLI 随观测数据保存。任务四 EKF 使用失锁/半周标记变化，以及站间单差的双频 GF、MW 跳变检查；发生跳变时重置受影响的模糊度。当前采用重新初始化，不修补原始载波观测；单频模式只使用 LLI 和观测码/半周状态变化检查。
-
-## 任务 2：双差函数模型
-
-`BuildRtkFunctionModel()` 构建短基线单历元模型。GPS 与 BDS 各选一个参考星，BDS-2/BDS-3 作为同一系统处理；默认选取各系统流动站高度角最高的合格卫星，并排除 BDS GEO 作为参考星。
+两种模式均可追加四个参数覆盖连接地址：
 
 ```text
-站间单差：流动站 - 基准站
-星间双差：非参考星单差 - 参考星单差
-线性模型：L = B × [dX, dY, dZ, N_DD, ...]^T + noise
+RTK.exe --stream base_ip base_port rover_ip rover_port
+RTK.exe --stream-rooftop base_ip base_port rover_ip rover_port
 ```
 
-`L` 为原始双差观测减双差几何距离，单位为米；坐标参数为流动站展开点的改正数，单位为米；模糊度参数为本历元的绝对双差模糊度，单位为周。相位观测先乘对应波长，设计矩阵中的模糊度系数也为波长。
+覆盖地址不会自动更换基站坐标，接入其他数据源时需同时检查几何基准配置。运行中按一次 `Ctrl+C`，等待程序关闭文件并输出统计；当前没有自动重连或断点续跑。
 
-基准站坐标由 `use_known_base_xyz` 选择，主流程默认使用已知坐标；关闭时使用基站 SPP。任务二检查输出以流动站 SPP 为展开点，任务四按迭代坐标或 EKF 预报坐标重新构模。几何距离分别使用各站的卫星位置。
+查看命令帮助：`.\x64\Debug\RTK.exe --help`。
 
-当前行序为 GPS 相位 f0/f1、GPS 伪距 f0/f1，再按同样顺序排列 BDS；单频模式省略 f1。前三列为 `dX/dY/dZ`，后续列为各系统、各频点的双差模糊度。`rows` 和 `ambiguities` 保存行列对应关系，任务 3 应沿用这些映射来构建权阵。
+## 配置与代码入口
 
-主流程中的系统、频点选项在 `rtk_main.cpp` 设置，例如：
+| 文件                                                                                                   | 职责与主要配置                                                                            |
+| ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| [rtk_main.cpp](RTK/rtk_main.cpp)                                                                       | 输入路径、输出后缀、基站坐标及主流程；`ProcessPreparedEpoch()` 串联单历元构模、估计和固定 |
+| [rtk_prepare.h](RTK/rtk_prepare.h) / [cpp](RTK/rtk_prepare.cpp)                                        | 两站同步与数据准备；默认同步差 `< 0.001 s`、高度角 `≥ 10°`、双频 SNR `> 30 dB-Hz`         |
+| [rtk_stream.h](RTK/rtk_stream.h) / [cpp](RTK/rtk_stream.cpp)                                           | 双站 TCP 输入、独立解码缓存与配对；每站最多缓存 5 个历元，满时暂停接收                    |
+| [rtk_mathematical_model.h](RTK/rtk_mathematical_model.h) / [cpp](RTK/rtk_mathematical_model.cpp)       | 系统、频点、参考星及双差模型；默认 GPS+BDS 双频，禁止 BDS GEO 作参考星                    |
+| [rtk_stochastic_model.h](RTK/rtk_stochastic_model.h) / [cpp](RTK/rtk_stochastic_model.cpp)             | 等方差/高度角定权；主流程采用高度角定权，伪距/相位方差比为 `10000`                        |
+| [rtk_estimation.h](RTK/rtk_estimation.h) / [cpp](RTK/rtk_estimation.cpp)                               | LS/EKF 估计、状态传递和周跳处理；默认 `ExtendedKalman`、`kinematic=true`                  |
+| [rtk_ambiguity_resolution.h](RTK/rtk_ambiguity_resolution.h) / [cpp](RTK/rtk_ambiguity_resolution.cpp) | LAMBDA 搜索及固定；默认 `Ratio > 2.0` 才固定                                              |
 
-```cpp
-rtk_model_options_t model_options;
-model_options.use_gps = true;
-model_options.use_bds = true;
-model_options.frequency_count = 1;  // 双系统单频；设为 2 则为双频
-```
+估计方式、运动模式和系统/频点目前通过源码配置，没有命令行切换开关。使用单历元 LS 时，在主入口创建 `estimation_options` 后将其 `method` 设为 `RtkEstimationMethod::LeastSquares`；静态 EKF 将 `kinematic` 设为 `false`。
 
-修改后需要重新编译，这些选项尚无命令行接口。任务 1 当前按双频筛选共视集合，因此任务 2 的单频模式不会恢复此前因第二频点缺失而被剔除的卫星。构模还检查三维双差几何是否满秩，失败历元会报告原因并跳过。
+准备层目前按双频筛选共视集合，后续选择单频模型不会恢复因第二频点缺失而被剔除的卫星。两站 SPP 独立保留，RTK 卫星状态采用共同星历重算；已知基站坐标不会覆盖原 SPP 结果。
 
-## 任务四：参数估计
+动态 EKF 每历元用 SPP 重置位置先验，跨历元传递可映射的模糊度及其协方差。整数固定只更新当前输出，不反馈滤波器，也不进行 fix-and-hold。异常解算被质量检查拒绝时，不提交新滤波状态。
 
-课件第 7–8 页给出单历元最小二乘流程，第 13–23 页指定扩展 Kalman 滤波及双差模糊度传递。两种估计器共用任务二、三的观测行列映射，均不修改原始历元或两站 SPP。
+## 输出
 
-- `LeastSquares`：求解 `x=(BᵀPB)⁻¹BᵀPL`，更新流动站展开点并重新构模，坐标改正范数不大于 `1e-4 m` 时收敛，最多 10 次。模糊度为绝对双差模糊度，每次重新求解，不累加上次的模糊度值。
-- `ExtendedKalman`：状态为绝对 ECEF 位置和双差模糊度。动态模式每历元将位置预报重置为 SPP、标准差设为 `30 m`，位置与历史模糊度先验去相关；静态模式传递位置和完整协方差。首历元、新星或周跳模糊度用 `(双差相位米值−双差伪距)/波长` 初始化，标准差为 `30 m/波长`。
-- 参考星变换按 `N(s,new_ref)=N(s,old_ref)−N(new_ref,old_ref)` 同时变换状态和完整协方差。消失星移除，新星初始化；不能从旧状态组成的新双差重新初始化。参考星周跳会重置所有涉及它的双差。
-- 默认位置随机游走标准差率为 `1e-4 m/sqrt(s)`，模糊度为 `1e-4 cycle/sqrt(s)`，过程方差增加量为标准差率平方乘时间间隔。静态位置才累积位置过程噪声。中断超过 `300 s`、定位模式或基站几何基准改变时重新初始化；重复/倒序时刻返回失败。
-- 双频 GF 默认阈值 `0.05 m`，MW 默认阈值 `5 cycle`，用于本课程短基线算例。阈值和初始方差可在 `rtk_estimation_options_t` 配置，不代表适合任意采样率或长基线。EKF 使用 Joseph 形式更新协方差；更新失败不覆盖上一成功状态。
+结果写入**运行时工作目录**。当前离线后缀为 `_3_1`，实时模式分别为 `_realtime`、`_realtime_rooftop`；离线后缀由源码设置，不随输入文件自动变化。
 
-在 `rtk_main.cpp` 中选择估计器：
+下表中的 `{suffix}` 表示上述后缀：
 
-```cpp
-rtk_estimation_options_t estimation_options;
-estimation_options.method = RtkEstimationMethod::ExtendedKalman;
-estimation_options.kinematic = true; // false：静态；LeastSquares不传递跨历元状态
-```
+| 文件                                                              | 内容                                   |
+| ----------------------------------------------------------------- | -------------------------------------- |
+| `base_observations{suffix}.txt`、`rover_observations{suffix}.txt` | 解码观测值 P/L/D/SNR                   |
+| `rtk_prepared{suffix}.txt`                                        | 共视星列表及两站 SPP 摘要              |
+| `rtk_function_model{suffix}.txt`                                  | 参考星、线性化坐标、设计矩阵及双差残差 |
+| `rtk_stochastic_model_Elevation{suffix}.txt`                      | 双差协方差阵 D 与权阵 P                |
+| `rtk_estimation{suffix}.txt`、`rtk_float{suffix}.csv`             | 固定前浮点参数、协方差及估计统计       |
+| `rtk_ambiguity{suffix}.txt`、`rtk_solution{suffix}.csv`           | 固定信息及最终选用的 FIX/FLOAT 结果    |
 
-协方差使用任务三给出的绝对观测噪声尺度。LS 输出 `(BᵀPB)⁻¹`，不自动乘后验 `sigma0²`；EKF 输出后验协方差。完整协方差中 XX、XN、NN 块单位分别是 `m²`、`m·cycle`、`cycle²`。LS 有多余观测时输出无量纲 `sigma0=sqrt(vᵀPv/(nv−nx))`；EKF 输出新息统计量 `innovation_nis`，不套用 LS 的自由度计算中误差。输出的 NN、XN 块保留给任务五使用。
+`rtk_float` 中的状态为 `FLOAT`，最终定位状态以 `rtk_solution` 为准。CSV 的 `dX_m/dY_m/dZ_m` 为流动站减基站的基线分量，ENU 以基站为原点。相位观测单位为周，模型残差和基线单位为米。
 
-验证入口与编译方法见 [任务四验证说明](tests/task4_README.md)。
-
-## 输出文件
-
-任务 3 的 `BuildRtkStochasticModel()` 直接使用任务二的 `rows`，不再筛星或更换参考星。主流程当前采用 `Elevation`，使用两站各自的高度角，非差相位方差为 `a²+b²/sin²(E)`，默认 `a=0.004 m`、`b=0.003 m`，伪距/相位方差比 `10000`。配置结构默认的 `EqualVariance` 仍可选，其非差相位标准差为 `0.005 m`。
-
-每条双差的方差为目标星与参考星单差方差之和，同一系统/频点/观测类型块内的非对角协方差为参考星单差方差。不同块假定误差不相关。相位按米定权，`D` 单位为 m²，`P=D⁻¹` 单位为 m⁻²；矩阵维数与任务二的观测数相同，不是参数数。等方差方案的相位标准差是可配置的实现取值，课件未要求必须取 `0.005 m`。
-
-当前主程序在**运行时的工作目录**创建以下文件：
-
-| 文件 | 内容 |
-| --- | --- |
-| `base_observations_3_1.txt` | 基准站逐个读取历元的解码观测值，含 P/L/D/SNR/code/LLI |
-| `rover_observations_3_1.txt` | 流动站逐个读取历元的解码观测值 |
-| `rtk_prepared_3_1.txt` | 有效同步历元、两站 SPP 坐标与钟差、共视观测、各站卫星状态和方位角/高度角 |
-| `rtk_function_model_3_1.txt` | 参考星、观测数 `nv`、参数数 `nx`、行列映射、`B` 矩阵和 `L` 向量 |
-| `rtk_stochastic_model_Elevation_3_1.txt` | 历元、定权方式与参数、参考星、逐行单差方差、双差方差阵 `D` 和权阵 `P` |
-| `rtk_estimation_3_1.txt` | 浮点基线 XYZ/ENU、绝对流动站坐标、模糊度与映射、完整协方差及 NN/XN 块、残差与质量统计 |
-| `rtk_float_3_1.csv` | 每历元一行的浮点结果、估计方法、基线、坐标标准差及状态初始化/传递数量 |
-
-观测单位为伪距 P：m、载波 L：周、多普勒 D：Hz、SNR：dB-Hz。任务 2 输出中的 `L` 向量已统一为米。
-
-**输出文件名当前固定使用 `_3_1` 后缀，切换到 `20240303` 输入也不会自动改名。** 再次运行会覆盖工作目录中的同名文件；比较两组数据时，应在下一次运行前保存并重命名结果，或在不同工作目录中使用绝对输入路径运行。
-
-控制台输出 `SYNC`、`COMMON`、`SPP`、`RTK FLOAT` 摘要，结束时统计各阶段成功与跳过的历元数。当前全部 RTK 解均为浮点状态，没有 Ratio 或固定解。详细协方差输出体积较大，验证时建议先取完整报文前缀，并在隔离工作目录中运行。
-
-## 检查与参考对比
-
-按课程要求先检查零基线，再检查短基线：
-
-1. 使用各数据目录下的 `RINEX/base.obs`、`RINEX/rove.obs` 检查解码历元、卫星号、频点、观测值和单位。
-2. 使用 `res/` 中的两站 SPP 参考结果，按 GPS 周和周内秒核对概略位置。
-3. 检查共视卫星、参考星、双差符号、行列映射以及 `B`、`L`，对比参考 `RTKInfo.txt` 时先统一历元、卫星集合、参考星和线性化坐标。
-4. 检查任务 3 的矩阵维数、与任务二一致的行序、双差相关性及 `D*P` 是否接近单位阵；完成任务 4–5 后，再与 `res/RTKRes.txt` 对比基线、定位误差、固定状态及 Ratio。
-
-数据包的 `res/RTKRes.txt` 和 `res/RTKInfo.txt` 是课程参考结果，不能作为当前程序已经得到固定解的依据。
-
-已提供任务 2、任务 3 独立测试入口，检查函数模型及两种定权方式的协方差传播、独立求逆、正定性和失败输入。编译与回放方法见 [任务 2、任务 3 验证说明](tests/README.md)。
-
-## 课件依据
-
-本说明对应同级 `课件/` 目录中的以下材料：
-
-- `卫星导航算法与程序设计II-实习任务1-V2.pptx`：两站数据准备、时间同步及筛选阈值。
-- `卫星导航算法与程序设计II-实习任务2 V2.pptx`：双差非组合函数模型与系统/频点配置要求。
-- `卫星导航算法与程序设计II-实习任务3.pptx`：随机模型与双差协方差传播。
-- `卫星导航算法与程序设计II-实习任务4 V3.pptx`：单历元与逐历元参数估计。
-- `卫星导航算法与程序设计II-实习任务5 - JH - V3.pptx`：LAMBDA 模糊度固定与位置更新。
+同一工作目录内重复运行会覆盖同名文件。保留不同算例或运行结果时，应使用独立工作目录或提前归档。离线观测文本在读取时导出，实时观测文本只保存准备成功的配对历元，两者历元数的含义不同。
