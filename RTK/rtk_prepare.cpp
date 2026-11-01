@@ -150,8 +150,12 @@ bool PassRtkObservationCheck(
 	{
 		return false;
 	}
-	const int sys = satsys(base_obs.sat, nullptr);
+	int prn = 0;
+	const int sys = satsys(base_obs.sat, &prn);
 	if (sys != SYS_GPS && sys != SYS_CMP)
+		return false;
+	// GEO不参与RTK共视筛选；SPP仍使用各站原有观测。
+	if (sys == SYS_CMP && (prn <= 5 || prn >= 59))
 		return false;
 
 	

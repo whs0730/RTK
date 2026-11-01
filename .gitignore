@@ -19,6 +19,7 @@ x64/
 *.ilk
 OEM7data/
 diagnostics_20261030_133102/
+ref_compare_20261101/
 # 默认忽略运行生成的日志和结果文件。
 *.log
 *.txt

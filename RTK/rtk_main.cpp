@@ -21,8 +21,8 @@
 #include <windows.h>
 using namespace std;
 // 无参数运行时只读取这两个默认文件；工作目录应能解析OEM7data相对路径。
-static const char* DEFAULT_INPUT_BASE_FILE = R"(OEM7data\20240301\base.log)";
-static const char* DEFAULT_INPUT_ROVER_FILE = R"(OEM7data\20240301\rove.log)";
+static const char* DEFAULT_INPUT_BASE_FILE = R"(OEM7data\20240303\base.log)";
+static const char* DEFAULT_INPUT_ROVER_FILE = R"(OEM7data\20240303\rove.log)";
 // OEM7data/readme.txt：20240301和20240303两组算例的已知基准站ECEF坐标，单位m。
 // 换其他基站数据时修改此处；没有已知坐标则将USE_KNOWN_BASE_XYZ设为false。
 static const bool USE_KNOWN_BASE_XYZ = true;
@@ -297,7 +297,7 @@ int main(int argc,char*argv[])
 		return -1;
 	}
 	// 实时输出使用独立后缀；同一模式再次运行会覆盖此前同名文件。
-	const string output_suffix = rooftop ? "_realtime_rooftop" : realtime ? "_realtime" : "_3_1";
+	const string output_suffix = rooftop ? "_realtime_rooftop" : realtime ? "_realtime" : "_3_3";
 	ofstream base_obs_out("base_observations" + output_suffix + ".txt");
 	ofstream rover_obs_out("rover_observations" + output_suffix + ".txt");
 	ofstream prepared_out("rtk_prepared" + output_suffix + ".txt");
