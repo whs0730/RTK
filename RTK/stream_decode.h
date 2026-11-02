@@ -1,16 +1,11 @@
 #pragma once
-//Windows 头文件
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
 
 #include "decode.h"
 
-#include <winsock2.h>//Windows socket 网络通信
+#include "socket_platform.h"
 #include <cstdint>
 #include <string>
 
-#pragma comment(lib, "Ws2_32.lib")//链接 Winsock 库
 //TCP实时流读取器类
 class TcpOem4Stream {
 public:
@@ -29,8 +24,10 @@ public:
 private:
     void SetLastSocketError(const char* prefix);
 
-    SOCKET sock_ = INVALID_SOCKET;//保存 socket 句柄。初值是无效 socket
-    bool wsa_started_ = false;//记录 Winsock 是否已经启动
+    socket_platform::Handle sock_ = socket_platform::invalid;
+#ifdef _WIN32
+    bool wsa_started_ = false;
+#endif
     int receive_timeout_ms_ = 5000;
     std::string last_error_;//保存错误信息
 };

@@ -12,6 +12,16 @@
 
 ## 编译
 
+Ubuntu 24.04 / GCC / CMake 的构建、Azure 四小时运行、日志保存与信号退出说明见 [Linux 运行指南](docs/linux.md)。
+
+~~~bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+cmake --build build -j 4
+bash scripts/run_rooftop.sh 4h
+~~~
+
+以下为原有 Windows / Visual Studio 构建方式。
+
 环境为 Windows、MSVC `v145`、C++20 和 Windows SDK，工程已配置 UTF-8 编译。
 
 1. 用 Visual Studio 打开 [RTK.slnx](RTK.slnx)，或直接打开 [RTK.vcxproj](RTK/RTK.vcxproj)。
@@ -31,7 +41,7 @@ Set-Location .\RTK
 ..\x64\Debug\RTK.exe
 ```
 
-当前默认读取 `RTK/OEM7data/20240301/` 下的 `base.log`、`rove.log`。数据未随仓库提交，需要自行准备。
+当前默认读取 `RTK/OEM7data/20240303/` 下的 `base.log`、`rove.log`。数据未随仓库提交，需要自行准备。
 
 切换数据时，修改 `rtk_main.cpp` 中的 `DEFAULT_INPUT_BASE_FILE`、`DEFAULT_INPUT_ROVER_FILE`，并检查基站坐标与输出后缀，然后重新编译。当前入口不接受命令行文件路径参数。
 
@@ -75,7 +85,7 @@ RTK.exe --stream-rooftop base_ip base_port rover_ip rover_port
 
 ## 输出
 
-结果写入**运行时工作目录**。当前离线后缀为 `_3_1`，实时模式分别为 `_realtime`、`_realtime_rooftop`；离线后缀由源码设置，不随输入文件自动变化。
+结果写入**运行时工作目录**。当前离线后缀为 `_3_3`，实时模式分别为 `_realtime`、`_realtime_rooftop`；离线后缀由源码设置，不随输入文件自动变化。
 
 下表中的 `{suffix}` 表示上述后缀：
 

@@ -73,25 +73,25 @@ string sat2id(int sat)
 
     switch (sys) {
     case SYS_GPS:
-        sprintf_s(buff, "G%02d", prn);
+        snprintf(buff, sizeof(buff), "G%02d", prn);
         break;
     case SYS_GLO:
-        sprintf_s(buff, "R%02d", prn);
+        snprintf(buff, sizeof(buff), "R%02d", prn);
         break;
     case SYS_GAL:
-        sprintf_s(buff, "E%02d", prn);
+        snprintf(buff, sizeof(buff), "E%02d", prn);
         break;
     case SYS_QZS:
-        sprintf_s(buff, "J%02d", prn);
+        snprintf(buff, sizeof(buff), "J%02d", prn);
         break;
     case SYS_CMP:
-        sprintf_s(buff, "C%02d", prn);
+        snprintf(buff, sizeof(buff), "C%02d", prn);
         break;
     case SYS_IRN:
-        sprintf_s(buff, "I%02d", prn);
+        snprintf(buff, sizeof(buff), "I%02d", prn);
         break;
     default:
-        sprintf_s(buff, "%03d", sat);
+        snprintf(buff, sizeof(buff), "%03d", sat);
         break;
     }
     return string(buff);

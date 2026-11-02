@@ -18,11 +18,15 @@
 #include <string>
 #include <atomic>
 #include <memory>
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <csignal>
+#endif
 using namespace std;
 // 无参数运行时只读取这两个默认文件；工作目录应能解析OEM7data相对路径。
-static const char* DEFAULT_INPUT_BASE_FILE = R"(OEM7data\20240303\base.log)";
-static const char* DEFAULT_INPUT_ROVER_FILE = R"(OEM7data\20240303\rove.log)";
+static const char* DEFAULT_INPUT_BASE_FILE = R"(OEM7data/20240303/base.log)";
+static const char* DEFAULT_INPUT_ROVER_FILE = R"(OEM7data/20240303/rove.log)";
 // OEM7data/readme.txt：20240301和20240303两组算例的已知基准站ECEF坐标，单位m。
 // 换其他基站数据时修改此处；没有已知坐标则将USE_KNOWN_BASE_XYZ设为false。
 static const bool USE_KNOWN_BASE_XYZ = true;
@@ -30,6 +34,7 @@ static const double KNOWN_BASE_XYZ[3] = { -2267808.6227, 5009324.7699, 3221016.8
 // RTS1实时流的基站位于工学部，与离线算例的基站坐标不同。
 // 覆盖IP/端口不会自动更换几何基准；改用其他基站时须一并核对本坐标。
 static const double STREAM_BASE_XYZ[3] = { -2267335.856, 5008649.133, 3222374.912 };
+#ifdef _WIN32
 static atomic<bool> stop_requested{false};
 
 static BOOL WINAPI HandleConsoleControl(DWORD event)
@@ -42,17 +47,49 @@ static BOOL WINAPI HandleConsoleControl(DWORD event)
 	}
 	return FALSE;
 }
+#else
+static volatile sig_atomic_t stop_signal = 0;
+
+static void HandleStopSignal(int signal)
+{
+    // 信号处理器只写 sig_atomic_t，文件刷新与 socket 关闭由主循环完成。
+    stop_signal = signal;
+}
+#endif
+
+static bool StopRequested()
+{
+#ifdef _WIN32
+    return stop_requested.load();
+#else
+    return stop_signal != 0;
+#endif
+}
+
+static bool InstallStopHandlers()
+{
+#ifdef _WIN32
+    return SetConsoleCtrlHandler(HandleConsoleControl, TRUE) != 0;
+#else
+    struct sigaction action{};
+    action.sa_handler = HandleStopSignal;
+    sigemptyset(&action.sa_mask);
+    // 不设置 SA_RESTART，让连接和接收等待可被退出信号打断。
+    return sigaction(SIGINT, &action, nullptr) == 0 &&
+        sigaction(SIGTERM, &action, nullptr) == 0;
+#endif
+}
 
 static void PrintUsage(ostream& out)
 {
 	out << "Usage:\n"
-		<< "  RTK.exe\n"
-		<< "  RTK.exe --stream [base_ip base_port rover_ip rover_port]\n"
-		<< "  RTK.exe --stream-rooftop [base_ip base_port rover_ip rover_port]\n"
+		<< "  RTK\n"
+		<< "  RTK --stream [base_ip base_port rover_ip rover_port]\n"
+		<< "  RTK --stream-rooftop [base_ip base_port rover_ip rover_port]\n"
 		<< "Offline reads the default files configured in rtk_main.cpp.\n"
 		<< "--stream uses the RTS1 base coordinates in STREAM_BASE_XYZ.\n"
 		<< "Rooftop uses 8.148.22.229:2002/3002 and fixes the first valid base SPP coordinate.\n"
-		<< "Press Ctrl+C to finish realtime processing and close output files.\n";
+		<< "Press Ctrl+C (or send SIGTERM on Linux) to finish and close output files.\n";
 }
 
 static bool ParsePort(const char* text, unsigned short& port)
@@ -277,20 +314,30 @@ int main(int argc,char*argv[])
 	}
 	if (realtime)
 	{
+		if (!InstallStopHandlers())
+		{
+			cerr << "Cannot register realtime stop handlers" << endl;
+			return EXIT_FAILURE;
+		}
 		cout << "Opening base stream " << stream_options.base_ip << ':' << stream_options.base_port
 			<< " and rover stream " << stream_options.rover_ip << ':' << stream_options.rover_port << endl;
 		if (!stream.Open(stream_options))
 		{
+			if (StopRequested())
+			{
+				cout << "Stopped during stream connection." << endl;
+				return EXIT_SUCCESS;
+			}
 			cerr << stream.LastError() << endl;
 			return EXIT_FAILURE;
 		}
 	}
-	else if (fopen_s(&base_fp, input_base_file.c_str(), "rb") != 0)
+	else if ((base_fp = fopen(input_base_file.c_str(), "rb")) == nullptr)
 	{
 		cerr << "Can't open base file: " << input_base_file << endl;
 		return -1;
 	}
-	if (!realtime && fopen_s(&rover_fp, input_rover_file.c_str(), "rb") != 0)
+	if (!realtime && (rover_fp = fopen(input_rover_file.c_str(), "rb")) == nullptr)
 	{
 		cerr << "Can't open rover file: " << input_rover_file << endl;
 		fclose(base_fp);
@@ -357,16 +404,11 @@ int main(int argc,char*argv[])
 	auto rtk_epoch = make_unique<rtk_epoch_t>();
 	if (realtime)
 	{
-		if (!SetConsoleCtrlHandler(HandleConsoleControl, TRUE))
-		{
-			cerr << "Cannot register realtime stop handler: " << GetLastError() << endl;
-			return EXIT_FAILURE;
-		}
 		cout << "Realtime processing started. Press Ctrl+C to finish." << endl;
 		cout << "Realtime output suffix: " << output_suffix << endl;
 	}
 	// 文件模式任一站耗尽即结束；实时模式持续轮询，直到Ctrl+C、接收错误或写入失败。
-	while ((realtime || (has_base && has_rover)) && !output_failed && !stop_requested.load())
+	while ((realtime || (has_base && has_rover)) && !output_failed && !StopRequested())
 	{
 		double dt = 0.0;
 		int result = 0;
@@ -472,7 +514,11 @@ int main(int argc,char*argv[])
 	if (realtime)
 	{
 		stream.Close();
+#ifdef _WIN32
 		SetConsoleCtrlHandler(HandleConsoleControl, FALSE);
+#else
+		if (StopRequested()) cout << "Stop signal: " << stop_signal << endl;
+#endif
 	}
 	// close仍可能报告缓冲数据写入失败；正常跳出循环不代表所有输出已成功落盘。
 	base_obs_out.close();
@@ -547,6 +593,8 @@ int main(int argc,char*argv[])
 	if (realtime)
 	{
 		const auto& statistics = stream.Statistics();
+		cout << "Realtime received bytes: base=" << statistics.base.received_bytes
+			<< " rover=" << statistics.rover.received_bytes << endl;
 		cout << "Realtime received epochs: base=" << statistics.base.observation_epochs
 			<< " rover=" << statistics.rover.observation_epochs << endl;
 		cout << "Realtime duplicate epochs: base=" << statistics.base.duplicate_epochs

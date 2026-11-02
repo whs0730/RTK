@@ -44,3 +44,7 @@ AGENTS.md
 HANDOFF.md
 
 *.py
+# 跨平台构建入口与可随仓库复现的兼容性测试。
+!CMakeLists.txt
+!portability_tests/*.py
+runs/

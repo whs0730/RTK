@@ -1,111 +1,94 @@
-﻿#include "stream_decode.h"               
-#include<string>
-#include <cstring>                       // memcpy, memmove 等
-#include <windows.h>                     // Windows API
-
-#pragma warning(disable:4996)            // 关闭 VS 对某些旧函数（如 inet_addr）的安全警告
-
-// 打开 TCP 连接
-static bool OpenSocket(SOCKET& sock, const char IP[], const unsigned short Port)
-{
-    WSADATA wsaData;                         // 保存 Winsock 初始化信息
-    SOCKADDR_IN addrSrv;                     // 保存 IPv4 地址和端口
-
-    if (!WSAStartup(MAKEWORD(2, 2), &wsaData))
-    {
-        // 创建 TCP 套接字
-        // 本接口只做同步轮询，不发起重叠I/O。
-        if ((sock = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, 0)) != INVALID_SOCKET)
-        {
-            addrSrv.sin_addr.S_un.S_addr = inet_addr(IP);   // 把字符串 IP 转成网络字节序地址
-            addrSrv.sin_family = AF_INET;                  // IPv4
-            addrSrv.sin_port = htons(Port);                // 把端口从主机字节序转成网络字节序
-
-            // 连接服务器
-            if (connect(sock, (SOCKADDR*)&addrSrv, sizeof(SOCKADDR)) == SOCKET_ERROR)
-            {
-                closesocket(sock);                         // 连接失败，关闭套接字
-                sock = INVALID_SOCKET;                     // 将句柄置为无效
-                WSACleanup();                              // 清理 Winsock
-                return false;
-            }
-            return true;                                  
-        }
-        WSACleanup();                                      // socket() 失败，清理 Winsock
-    }
-    return false;                                        
-}
-
-// 关闭 TCP 连接并清理 Winsock
-
-static void CloseSocket(SOCKET& sock)
-{
-    closesocket(sock);                                     // 关闭套接字
-    WSACleanup();                                          // 清理 Winsock 资源
-}
-
-// 析构函数：确保关闭连接
+﻿#include "stream_decode.h"
+#include <chrono>
+#include <cstring>
+#include <thread>
 
 TcpOem4Stream::~TcpOem4Stream()
 {
-    Close();                                               // 关闭连接，释放资源
+    Close();
 }
 
-// 打开指定 IP 和端口的 TCP 流，并设置接收超时
 bool TcpOem4Stream::Open(const char* ip, unsigned short port, int recv_timeout_ms)
 {
-    Close();                                               // 先关闭可能已存在的连接
-
-    if (!OpenSocket(sock_, ip, port)) {                    // 尝试打开 TCP 连接
-        SetLastSocketError("OpenSocket failed");           // 记录错误信息
-        Close();                                           // 清理资源
+    Close();
+#ifdef _WIN32
+    WSADATA data;
+    const int startup_error = WSAStartup(MAKEWORD(2, 2), &data);
+    if (startup_error != 0)
+    {
+        last_error_ = "WSAStartup failed: " + to_string(startup_error);
         return false;
     }
-    wsa_started_ = true;                                   // 标记 Winsock 已启动
-
-    u_long nonblocking = 1;
-    if (ioctlsocket(sock_, FIONBIO, &nonblocking) == SOCKET_ERROR)
+    wsa_started_ = true;
+    // 同步轮询不使用重叠 I/O，保留 Winsock 的 flags=0 创建方式。
+    sock_ = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, 0);
+#else
+    sock_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#endif
+    if (sock_ == socket_platform::invalid)
     {
-        SetLastSocketError("ioctlsocket(FIONBIO) failed");
+        SetLastSocketError("socket failed");
+        Close();
+        return false;
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(port);
+    if (inet_pton(AF_INET, ip, &address.sin_addr) != 1)
+    {
+        last_error_ = string("Invalid IPv4 address: ") + ip;
+        Close();
+        return false;
+    }
+    if (connect(sock_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
+    {
+        SetLastSocketError("connect failed");
+        Close();
+        return false;
+    }
+    if (!socket_platform::SetNonblocking(sock_))
+    {
+        SetLastSocketError("set nonblocking failed");
         Close();
         return false;
     }
     receive_timeout_ms_ = recv_timeout_ms;
-
-    last_error_.clear();                                   // 清除上一次错误
+    last_error_.clear();
     return true;
 }
 
-// 关闭 TCP 连接
-
 void TcpOem4Stream::Close()
 {
-    if (sock_ != INVALID_SOCKET || wsa_started_) {         // 如果套接字有效或曾经初始化过 Winsock
-        CloseSocket(sock_);                                // 关闭套接字并清理 Winsock
-        sock_ = INVALID_SOCKET;                            // 置为无效套接字
-        wsa_started_ = false;                              // 标记 Winsock 未启动
+    if (sock_ != socket_platform::invalid)
+    {
+        socket_platform::Close(sock_);
+        sock_ = socket_platform::invalid;
     }
+#ifdef _WIN32
+    if (wsa_started_)
+    {
+        WSACleanup();
+        wsa_started_ = false;
+    }
+#endif
 }
-
-
-// 读取一个字节
 
 bool TcpOem4Stream::ReadByte(uint8_t* data)
 {
-    return ReadExact(data, 1);                             // 委托给 ReadExact，读取 1 字节
+    return ReadExact(data, 1);
 }
-
-// 精确读取指定长度的数据（循环接收直到读满 len 字节）
 
 bool TcpOem4Stream::ReadExact(uint8_t* data, int len)
 {
-    if (data == nullptr || len <= 0 || sock_ == INVALID_SOCKET) {
+    if (data == nullptr || len <= 0 || sock_ == socket_platform::invalid)
+    {
         last_error_ = "stream is not open";
         return false;
     }
-
     int got = 0;
-    while (got < len) {
+    while (got < len)
+    {
         const int n = RecvPacket(data + got, len - got, 0);
         if (n < 0) return false;
         got += n;
@@ -113,66 +96,60 @@ bool TcpOem4Stream::ReadExact(uint8_t* data, int len)
     return true;
 }
 
-
-// 接收一个数据包（非精确读取，一次 recv 调用）
-// 参数：data    - 接收缓冲区
-//       max_len - 缓冲区最大长度
-//       sleep_ms- 接收前等待时间（毫秒），>0 时先 Sleep
 int TcpOem4Stream::RecvPacket(uint8_t* data, int max_len, int sleep_ms)
 {
-    // 参数检查
-    if (data == nullptr || max_len <= 0 || sock_ == INVALID_SOCKET) {
-        last_error_ = "stream is not open";                
+    if (data == nullptr || max_len <= 0 || sock_ == socket_platform::invalid)
+    {
+        last_error_ = "stream is not open";
         return -1;
     }
-
-    if (sleep_ms > 0) {
-        Sleep(sleep_ms);                                    // 接收前等待
+    if (sleep_ms > 0)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
     }
 
     fd_set readable;
     FD_ZERO(&readable);
     FD_SET(sock_, &readable);
     timeval timeout{ receive_timeout_ms_ / 1000, (receive_timeout_ms_ % 1000) * 1000 };
-    // 用select等待数据；不让日常轮询触发阻塞recv的SO_RCVTIMEO。
-    const int ready = select(0, &readable, nullptr, nullptr, &timeout);
+#ifdef _WIN32
+    const int nfds = 0;
+#else
+    // POSIX select 需要最大文件描述符加一；Winsock 忽略该参数。
+    const int nfds = sock_ + 1;
+#endif
+    const int ready = select(nfds, &readable, nullptr, nullptr, &timeout);
     if (ready == 0) return 0;
-    if (ready == SOCKET_ERROR)
+    if (ready < 0)
     {
-        const int error = WSAGetLastError();
-        if (error == WSAEINTR) return 0;
+        const int error = socket_platform::LastError();
+        if (socket_platform::Interrupted(error)) return 0;
         last_error_ = "select failed: " + to_string(error);
         return -1;
     }
 
-    int n = recv(sock_, reinterpret_cast<char*>(data), max_len, 0);
-    if (n > 0) {
-        return n;                                           // 成功接收到数据，返回字节数
-    }
-
-    if (n == 0) {
-        last_error_ = "remote host closed the connection";  // 连接关闭
+    const int n = static_cast<int>(recv(sock_, reinterpret_cast<char*>(data), max_len, 0));
+    if (n > 0) return n;
+    if (n == 0)
+    {
+        last_error_ = "remote host closed the connection";
         return -1;
     }
-
-    int err = WSAGetLastError();                            // 获取错误
-    // 可读状态发生变化时非阻塞recv仍可能暂无数据，留到下次轮询。
-    if (err == WSAEINTR || err == WSAEWOULDBLOCK) {
-        return 0;
-    }
-
-    last_error_ = "recv failed: " + to_string(err);    // 记录错误
+    const int error = socket_platform::LastError();
+    // 可读状态变化后 recv 仍可能暂无数据，留到下一轮；真正的断开仍返回错误。
+    if (socket_platform::Interrupted(error) || socket_platform::WouldBlock(error)) return 0;
+    last_error_ = "recv failed: " + to_string(error);
     return -1;
 }
-// 返回最后一次错误信息
+
 const std::string& TcpOem4Stream::LastError() const
 {
     return last_error_;
 }
-// 设置最后一次错误信息，附加前缀和当前 Winsock 错误码
+
 void TcpOem4Stream::SetLastSocketError(const char* prefix)
 {
-    last_error_ = std::string(prefix) + ": " + to_string(WSAGetLastError());
+    last_error_ = std::string(prefix) + ": " + to_string(socket_platform::LastError());
 }
 
 // 尝试从缓冲区 Buff 中解码 OEM4 报文
