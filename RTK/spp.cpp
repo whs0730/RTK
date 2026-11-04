@@ -347,7 +347,9 @@ Matrix* LeastSquares(Matrix X, obsd_t* obs, satpos_t* sat, const nav_t* nav, int
         double Xs = s.pos[0], Ys = s.pos[1], Zs = s.pos[2];
         double delX = Xs - X[0][0], delY = Ys - X[1][0], delZ = Zs - X[2][0];
         //计算几何距离
-        double p = sqrt(delX * delX + delY * delY + delZ * delZ);
+        const double rho = sqrt(delX * delX + delY * delY + delZ * delZ);
+        const double receiver[3] = {X[0][0], X[1][0], X[2][0]};
+        const double p = GeometricRange(receiver, s.pos);
         double Trop = 0.0;//对流层延迟初始为 0
         //如果当前接收机坐标不是全 0，就说明已经有近似位置，可以计算高度角和对流层改正
         if (!(X[0][0] == 0.0 && X[1][0] == 0.0 && X[2][0] == 0.0))
@@ -379,12 +381,14 @@ Matrix* LeastSquares(Matrix X, obsd_t* obs, satpos_t* sat, const nav_t* nav, int
             delete recBLH;
         }
         //几何距离太小，说明计算异常
-        if (p < 1.0)
+        if (rho < 1.0)
         {
             return nullptr;
         }
         //设计矩阵
-        double B1 = -delX / p, B2 = -delY / p, B3 = -delZ / p;
+        double B1 = -delX / rho - OMGed_GPS / Clight * Ys;
+        double B2 = -delY / rho + OMGed_GPS / Clight * Xs;
+        double B3 = -delZ / rho;
         int clk_index = SppClockIndex(sys, mode);
         if (clk_index < 0)
         {
@@ -737,13 +741,14 @@ Matrix *SpeedLeastSquares(obsd_t *obs, satpos_t *sat, int n, sol_t *sol, int nv)
         double D_mps = DopplerToRangeRate(o);
 
         // 卫星速度沿视线方向投影
-        double sat_rate = l * s.vel[0] + m * s.vel[1] + nn * s.vel[2];
+        double sat_rate = l * s.vel[0] + m * s.vel[1] + nn * s.vel[2] +
+            OMGed_GPS / Clight * (s.vel[0] * Yr - s.vel[1] * Xr);
         if (index >= nv)
         {
             return nullptr;
         }
-        B[index][0] = -l;
-        B[index][1] = -m;
+        B[index][0] = -l - OMGed_GPS / Clight * Ys;
+        B[index][1] = -m + OMGed_GPS / Clight * Xs;
         B[index][2] = -nn;
         B[index][3] = 1.0;
 

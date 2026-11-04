@@ -17,7 +17,7 @@ struct sd_obs_t
     double code[2]{};              // P_rover-P_base，m
     double phase[2]{};             // lambda*(L_rover-L_base)，m
     double geometry = 0.0;        // rho_rover-rho_base，m
-    double coefficient[3]{};      // 流动站坐标偏导：-(sat-rover)/rho
+    double coefficient[3]{};      // 流动站坐标偏导，含地球自转项
     double rover_elevation = 0.0;
     unsigned char lli[2]{};
 };
@@ -81,11 +81,6 @@ static bool ValidFrequency(const obsd_t& base, const obsd_t& rover,int sys, int 
         isfinite(rover.L[frequency]) && rover.L[frequency] != 0.0 &&
         isfinite(base.SNR[frequency]) && base.SNR[frequency] > snr_mask &&
         isfinite(rover.SNR[frequency]) && rover.SNR[frequency] > snr_mask;
-}
-
-static double GeometricRange(const double receiver[3], const double satellite[3])
-{
-    return hypot(satellite[0] - receiver[0],satellite[1] - receiver[1], satellite[2] - receiver[2]);
 }
 
 // GEO分类沿用本项目satpos.cpp的PRN规则；GEO仍可作为非参考星。
@@ -175,12 +170,16 @@ static bool ComputeSingleDifference(const rtk_epoch_t& epoch, const double base_
         result.sys = sys;
         result.geometry = rover_range - base_range;
         result.rover_elevation = item.rover_azel[1];
-        // rho=|sat-rover|，故对rover坐标求导得到负的视线单位向量。
+        // 视线单位向量使用欧氏距离归一化，再加上自转距离项的偏导。
+        const double rho = hypot(item.rover_sat.pos[0] - rover_xyz[0],
+            item.rover_sat.pos[1] - rover_xyz[1], item.rover_sat.pos[2] - rover_xyz[2]);
         for (int axis = 0; axis < 3; ++axis)
         {
-            result.coefficient[axis] = -(item.rover_sat.pos[axis] - rover_xyz[axis]) / rover_range;
+            result.coefficient[axis] = -(item.rover_sat.pos[axis] - rover_xyz[axis]) / rho;
 
         }
+        result.coefficient[0] -= OMGed_GPS / Clight * item.rover_sat.pos[1];
+        result.coefficient[1] += OMGed_GPS / Clight * item.rover_sat.pos[0];
         for (int f = 0; f < options.frequency_count; ++f)
         {
             result.code[f] = rover.P[f] - base.P[f];

@@ -31,6 +31,7 @@ struct eph_t {
     int sat;        // 内部卫星编号
     int prn;        // 系统内 PRN
     int week;       // 周号
+    int health;     // BDS广播健康标志：0健康，1不健康；GPS未使用此字段
     double toes;    // 原始 toe 秒，BDS 为 BDT 周内秒
     double tocs;    // 原始 toc 秒
     gtime_t toe, toc;

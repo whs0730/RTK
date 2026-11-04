@@ -44,12 +44,11 @@ static bool CalculateBroadcastSatState(gtime_t calc_time, eph_t* eph, int sat_no
     return true;
 }
 
-// 计算信号发射时刻的卫星状态，并把卫星坐标旋转到接收时刻对应的地固系。
+// 计算发射时刻的卫星状态；地球自转改正由接收机几何距离模型处理。
 // 步骤：
 // 1. 用双频IF伪距 PIF/c 得到近似传播时间；
 // 2. 得到近似发射时刻，并计算一次卫星钟差；
 // 3. 用卫星钟差修正发射时刻，再重新计算卫星位置、速度、钟差、钟速；
-// 4. 按传播时间做地球自转改正。
 static bool CaculateSatStateAtTransmitTime(const obsd_t& obs, eph_t* eph, satpos_t& sat)
 {
     //双频无电离层组合伪距
@@ -76,9 +75,6 @@ static bool CaculateSatStateAtTransmitTime(const obsd_t& obs, eph_t* eph, satpos
     {
         return false;
     }
-    //修正后的发射时刻重新计算卫星位置、速度、钟差、钟速
-    double tau = timediff(obs.time, tx);
-    ApplyEarthRotationCorrection(sat, tau);
     sat.time = tx;
 
     return true;
