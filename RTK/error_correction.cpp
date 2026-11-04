@@ -94,15 +94,9 @@ double Klobuchar(gtime_t t, const double* pos,const double* azel, double* ionpar
 
     return Clight * delay_sec; // 单位：m
 }
-// 地球自转改正：把发射时刻卫星坐标旋转到接收时刻对应的地固系
-// tau 为信号传播时间，单位：s
-void ApplyEarthRotationCorrection(satpos_t& sat, double tau)
+double GeometricRange(const double receiver[3], const double satellite[3])
 {
-    double theta = OMGed_GPS * tau;
-
-    double x = sat.pos[0];
-    double y = sat.pos[1];
-
-    sat.pos[0] = cos(theta) * x + sin(theta) * y;
-    sat.pos[1] = -sin(theta) * x + cos(theta) * y;
+    // 伪距包含接收机钟差，不能用P/c作为自转改正的物理传播时间。
+    return hypot(satellite[0] - receiver[0], satellite[1] - receiver[1], satellite[2] - receiver[2]) +
+        OMGed_GPS / Clight * (satellite[0] * receiver[1] - satellite[1] * receiver[0]);
 }

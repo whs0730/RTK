@@ -88,7 +88,7 @@ static void PrintUsage(ostream& out)
 		<< "  RTK --stream-rooftop [base_ip base_port rover_ip rover_port]\n"
 		<< "Offline reads the default files configured in rtk_main.cpp.\n"
 		<< "--stream uses the RTS1 base coordinates in STREAM_BASE_XYZ.\n"
-		<< "Rooftop uses 8.148.22.229:2002/3002 and fixes the first valid base SPP coordinate.\n"
+		<< "Rooftop uses base 8.148.22.229:3002 and rover 8.148.22.229:2002; fixes the first valid base SPP coordinate.\n"
 		<< "Press Ctrl+C (or send SIGTERM on Linux) to finish and close output files.\n";
 }
 
@@ -130,9 +130,9 @@ static bool ParseCommandLine(
 		realtime = true;
 		rooftop = true;
 		stream_options.base_ip = "8.148.22.229";
-		stream_options.base_port = 2002;
+		stream_options.base_port = 3002;
 		stream_options.rover_ip = "8.148.22.229";
-		stream_options.rover_port = 3002;
+		stream_options.rover_port = 2002;
 		if (argc == 2)
 		{
 			return true;

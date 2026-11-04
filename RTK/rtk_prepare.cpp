@@ -251,7 +251,7 @@ bool BuildRtkEpoch(const station_state_t& base,const station_state_t& rover,cons
 		}
 	}
 	// 两站广播星历报文可能不在同一秒到达。RTK必须使用同一套星历，
-	// 再按各站观测分别求发射时刻和自转改正，不能直接复制另一站的卫星坐标。
+	// 再按各站观测分别求发射时刻状态，不能直接复制另一站的卫星坐标。
 	nav_t shared_nav{};
 	for (int i = 0; i < base.raw.obs.n; ++i)
 	{

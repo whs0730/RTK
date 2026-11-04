@@ -42,6 +42,7 @@ bool has_valid_eph(const eph_t* eph)
     if (!eph) return false;
     if (eph->sat <= 0) return false;
     if (eph->sqrtA <= 0.0) return false;
+    if (satsys(eph->sat, nullptr) == SYS_CMP && eph->health != 0) return false;
     return true;
 }
 //根据卫星号 sat 和观测信号类型 code，返回该观测值对应的载波频率
@@ -484,6 +485,7 @@ static int decode_bdsephemerisb(raw_t* raw)
     eph->sat = sat;
     eph->prn = prn;
     eph->week = week;
+    eph->health = (int)U4(p + 16);
     // BDS广播星历中的toe/toc属于BDT。toes/tocs保留原始BDT周内秒供BDS轨道升交点经度项使用；toe/toc转为GPST，便于和观测历元GPST求时间差。
     eph->toes = toe;  
     eph->tocs = toc;

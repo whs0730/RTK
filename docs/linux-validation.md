@@ -66,3 +66,12 @@ Linux 退出测试分别向静默的双站实时进程发送 SIGINT / SIGTERM，
 - 40 个文件无哈希变化。
 
 适配没有启动 Azure 四小时任务，也未创建或修改 Azure 资源。下一步按 [Linux 运行指南](linux.md) 在目标 Azure 主机上完成四小时测试并归档整个输出目录。
+
+
+## 2026-11-04 合并 main 修复
+
+合入 `main@ab79fc8`：BDS 健康标志过滤、几何距离自转改正及相应偏导/测速项；楼顶默认端口为基站 3002、流动站 2002。帮助文字冲突保留 Linux 的 SIGTERM 说明。CMake、POSIX Socket 适配、运行脚本及退出信号处理均保留。
+
+合并结果在 WSL2 Ubuntu 22.04 / GCC 11.4.0 中完成独立 Release 构建，产物目录为 `build/merge_20261104/`。CTest 的 socket_transport 和 stream_shutdown 两项全部通过；测试只连接本机回环地址。
+
+原 RTK 工作区 `tests/health_rotation_tests.cpp` 链接到本次 Linux 核心库后，健康过滤、共同星历选择、健康 C56 保留、钟差不引起卫星旋转、SPP/RTK 几何及测速检查全部通过。该回归源文件仍是原工作区本地文件，不随本次合并提交。未运行全量离线解算，未建立外部实时连接，未替换已有运行目录或默认 build 下的旧可执行文件。

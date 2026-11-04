@@ -35,7 +35,7 @@ Windows 可继续用本工作区的 Visual Studio 工程，或使用 CMake；Win
 bash scripts/run_rooftop.sh 4h
 ~~~
 
-默认连接基站 `8.148.22.229:2002`、流动站 `8.148.22.229:3002`。覆盖 IP / 端口：
+默认连接基站 `8.148.22.229:3002`、流动站 `8.148.22.229:2002`。覆盖 IP / 端口：
 
 ~~~bash
 bash scripts/run_rooftop.sh 4h BASE_IP BASE_PORT ROVER_IP ROVER_PORT
