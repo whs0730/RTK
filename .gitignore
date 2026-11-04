@@ -20,6 +20,12 @@ x64/
 OEM7data/
 diagnostics_20261030_133102/
 ref_compare_20261101/
+.codegraph/
+independent_check/
+四个半小时短基线结果2/
+四个半小时短基线结果/
+四个半小时长基线结果/
+四个半小时长基线结果2/
 # 默认忽略运行生成的日志和结果文件。
 *.log
 *.txt
